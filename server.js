@@ -1,3 +1,5 @@
+import fs from "fs";
+import path from "path";
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
@@ -19,6 +21,20 @@ if (!process.env.GEMINI_API_KEY) {
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
+// ======================================================
+// PROMO STORAGE
+// ======================================================
+const DATA_PATH = path.join(process.cwd(), "data", "promo-codes.json");
+
+function readCodes() {
+  const raw = fs.readFileSync(DATA_PATH, "utf-8");
+  return JSON.parse(raw);
+}
+
+function writeCodes(data) {
+  fs.writeFileSync(DATA_PATH, JSON.stringify(data, null, 2));
+}
+
 // ==================
 // HEALTH CHECK
 // ==================
@@ -33,6 +49,64 @@ app.get("/health", (req, res) => {
 // Корень тоже оставим, чтобы не путаться
 app.get("/", (req, res) => {
   res.json({ status: "ok", service: "ai-backend" });
+});
+
+// ======================================================
+// PROMO SYSTEM
+// ======================================================
+
+// Проверка кода
+app.post("/api/promo/validate", (req, res) => {
+  try {
+    const { code } = req.body;
+    if (!code) return res.status(400).json({ ok: false });
+
+    const store = readCodes();
+    const clean = code.trim();
+
+    // MASTER CODES
+    if (store.master.includes(clean)) {
+      return res.json({ ok: true, type: "master" });
+    }
+
+    // PROMO CODES
+    const promo = store.promo.find((p) => p.code === clean);
+    if (!promo) return res.json({ ok: false });
+
+    if (promo.expiresAt && new Date(promo.expiresAt) < new Date()) {
+      return res.json({ ok: false, reason: "expired" });
+    }
+
+    if (promo.used) {
+      return res.json({ ok: false, reason: "used" });
+    }
+
+    return res.json({ ok: true, type: "promo" });
+  } catch (e) {
+    console.error("PROMO VALIDATE ERROR:", e);
+    res.status(500).json({ ok: false });
+  }
+});
+
+// Пометить промокод использованным
+app.post("/api/promo/consume", (req, res) => {
+  try {
+    const { code } = req.body;
+    if (!code) return res.status(400).json({ ok: false });
+
+    const store = readCodes();
+    const promo = store.promo.find((p) => p.code === code.trim());
+
+    if (!promo) return res.json({ ok: false });
+
+    promo.used = true;
+    writeCodes(store);
+
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error("PROMO CONSUME ERROR:", e);
+    res.status(500).json({ ok: false });
+  }
 });
 
 // ==================
