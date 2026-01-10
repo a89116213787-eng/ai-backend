@@ -1,3 +1,6 @@
+import { Pool } from "pg";
+import bcrypt from "bcrypt";
+import jwt from "jsonwebtoken";
 import fs from "fs";
 import path from "path";
 import express from "express";
@@ -6,6 +9,21 @@ import dotenv from "dotenv";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
 dotenv.config();
+
+// ==================
+// DB CONNECTION  ✅ КРИТИЧНО ДОБАВЛЕНО
+// ==================
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+});
+
+// проверка подключения
+pool.query("SELECT 1")
+  .then(() => console.log("✅ DB connected"))
+  .catch((e) => {
+    console.error("❌ DB connection error:", e);
+    process.exit(1);
+  });
 
 const app = express();
 app.use(cors());
@@ -19,7 +37,34 @@ if (!process.env.GEMINI_API_KEY) {
   process.exit(1);
 }
 
+// --- Проверка наличия секрета для JWT ---
+if (!process.env.JWT_SECRET) {
+  console.error("❌ JWT_SECRET is not set");
+  process.exit(1);
+}
+
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+
+// ==================
+// JWT MIDDLEWARE
+// ==================
+function authMiddleware(req, res, next) {
+  try {
+    const header = req.headers.authorization;
+
+    if (!header) {
+      return res.status(401).json({ ok: false, error: "no token" });
+    }
+
+    const token = header.replace("Bearer ", "");
+    const payload = jwt.verify(token, process.env.JWT_SECRET);
+
+    req.user = payload;
+    next();
+  } catch (e) {
+    return res.status(401).json({ ok: false, error: "invalid token" });
+  }
+}
 
 // ======================================================
 // PROMO STORAGE
@@ -46,16 +91,120 @@ app.get("/health", (req, res) => {
   });
 });
 
-// Корень тоже оставим, чтобы не путаться
 app.get("/", (req, res) => {
   res.json({ status: "ok", service: "ai-backend" });
 });
 
 // ======================================================
-// PROMO SYSTEM
+// AUTH SYSTEM
 // ======================================================
 
-// Проверка кода
+// ---------- REGISTER ----------
+app.post("/api/auth/register", async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({
+        ok: false,
+        error: "email and password required",
+      });
+    }
+
+    const exists = await pool.query(
+      "SELECT id FROM users WHERE email = $1",
+      [email]
+    );
+
+    if (exists.rows.length > 0) {
+      return res.status(400).json({
+        ok: false,
+        error: "user already exists",
+      });
+    }
+
+    const passwordHash = await bcrypt.hash(password, 10);
+
+    const result = await pool.query(
+      `INSERT INTO users (email, password_hash)
+       VALUES ($1, $2)
+       RETURNING id, email`,
+      [email, passwordHash]
+    );
+
+    const user = result.rows[0];
+
+    const token = jwt.sign(
+      { id: user.id, email: user.email },
+      process.env.JWT_SECRET,
+      { expiresIn: "7d" }
+    );
+
+    return res.json({
+      ok: true,
+      user,
+      token,
+    });
+  } catch (e) {
+    console.error("REGISTER ERROR:", e);
+    res.status(500).json({ ok: false, error: "register failed" });
+  }
+});
+
+// ---------- LOGIN ----------
+app.post("/api/auth/login", async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({
+        ok: false,
+        error: "email and password required",
+      });
+    }
+
+    const result = await pool.query(
+      "SELECT id, email, password_hash FROM users WHERE email = $1",
+      [email]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(401).json({
+        ok: false,
+        error: "invalid credentials",
+      });
+    }
+
+    const user = result.rows[0];
+
+    const okPass = await bcrypt.compare(password, user.password_hash);
+    if (!okPass) {
+      return res.status(401).json({
+        ok: false,
+        error: "invalid credentials",
+      });
+    }
+
+    const token = jwt.sign(
+      { id: user.id, email: user.email },
+      process.env.JWT_SECRET,
+      { expiresIn: "7d" }
+    );
+
+    return res.json({
+      ok: true,
+      user: { id: user.id, email: user.email },
+      token,
+    });
+  } catch (e) {
+    console.error("LOGIN ERROR:", e);
+    res.status(500).json({ ok: false, error: "login failed" });
+  }
+});
+
+// ======================================================
+// PROMO SYSTEM
+// ======================================================
 app.post("/api/promo/validate", (req, res) => {
   try {
     const { code } = req.body;
@@ -64,12 +213,10 @@ app.post("/api/promo/validate", (req, res) => {
     const store = readCodes();
     const clean = code.trim();
 
-    // MASTER CODES
     if (store.master.includes(clean)) {
       return res.json({ ok: true, type: "master" });
     }
 
-    // PROMO CODES
     const promo = store.promo.find((p) => p.code === clean);
     if (!promo) return res.json({ ok: false });
 
@@ -88,7 +235,6 @@ app.post("/api/promo/validate", (req, res) => {
   }
 });
 
-// Пометить промокод использованным
 app.post("/api/promo/consume", (req, res) => {
   try {
     const { code } = req.body;
@@ -110,9 +256,9 @@ app.post("/api/promo/consume", (req, res) => {
 });
 
 // ==================
-// GEMINI PROXY
+// GEMINI PROXY (JWT)
 // ==================
-app.post("/api/generate-image", async (req, res) => {
+app.post("/api/generate-image", authMiddleware, async (req, res) => {
   try {
     const { prompt } = req.body;
 
@@ -124,7 +270,6 @@ app.post("/api/generate-image", async (req, res) => {
       model: "gemini-2.5-flash-image"
     });
 
-    // защита от зависаний
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 30_000);
 
