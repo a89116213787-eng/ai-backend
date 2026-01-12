@@ -1,0 +1,11 @@
+{
+  "master": ["ADMIN-2026", "DEV-ACCESS"],
+  "promo": [
+    {
+      "code": "NB-TEST-001",
+      "used": false,
+      "maxUses": 1,
+      "expiresAt": "2026-12-31"
+    }
+  ]
+}
