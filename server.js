@@ -572,6 +572,7 @@ app.listen(PORT, () => {
   console.log(`🚀 AI backend running on port ${PORT}`);
 });
 
+// FORCE UPDATE 2026-01-12
 app.get("/test-mail", async (req, res) => {
   try {
     await sendMail({
