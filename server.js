@@ -8,7 +8,6 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import { sendMail } from "./src/services/mailService.js";
 
 dotenv.config();
 
@@ -570,20 +569,4 @@ app.post("/api/generate-image", authMiddleware, async (req, res) => {
 // ==================
 app.listen(PORT, () => {
   console.log(`🚀 AI backend running on port ${PORT}`);
-});
-
-// FORCE UPDATE 2026-01-12
-app.get("/test-mail", async (req, res) => {
-  try {
-    await sendMail({
-      to: "noreply@dizain.pro", // поставь свою реальную почту
-      subject: "Тест почты",
-      html: "<h2>Почта работает 🎉</h2><p>Если ты это читаешь — SMTP настроен правильно.</p>",
-    });
-
-    res.json({ ok: true, message: "Mail sent" });
-  } catch (err) {
-    console.error("MAIL ERROR:", err);
-    res.status(500).json({ ok: false, error: err.message });
-  }
 });
