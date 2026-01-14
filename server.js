@@ -1,3 +1,4 @@
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import crypto from "crypto";
 import { Pool } from "pg";
 import bcrypt from "bcrypt";
@@ -7,7 +8,6 @@ import path from "path";
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
-import { GoogleGenerativeAI } from "@google/generative-ai";
 
 dotenv.config();
 
