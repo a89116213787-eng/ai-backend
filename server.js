@@ -8,6 +8,7 @@ import path from "path";
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
+import { sendMail } from "./src/services/mailClient.js";
 
 dotenv.config();
 
@@ -303,7 +304,7 @@ app.post("/api/auth/forgot-password", async (req, res) => {
       [email]
     );
 
-    // даже если юзера нет — отвечаем одинаково (без утечки инфы)
+    // даже если юзера нет — отвечаем одинаково
     if (result.rows.length === 0) {
       return res.json({
         ok: true,
@@ -325,16 +326,32 @@ app.post("/api/auth/forgot-password", async (req, res) => {
       [userId, token, expiresAt]
     );
 
-    // 🔔 ПОКА БЕЗ ПОЧТЫ — просто логируем
-    console.log("🔐 PASSWORD RESET TOKEN:", token);
+    // 📧 отправляем письмо
+    await sendMail({
+      to: email,
+      subject: "Восстановление пароля",
+      html: `
+        <h2>Сброс пароля</h2>
+        <p>Перейдите по ссылке:</p>
+        <p>
+          <a href="https://dizain.pro/reset-password?token=${token}">
+            Сбросить пароль
+          </a>
+        </p>
+      `,
+    });
 
+    // ✅ ВАЖНО: ответ клиенту
     return res.json({
       ok: true,
       message: "If user exists, reset instructions sent",
     });
   } catch (e) {
     console.error("FORGOT PASSWORD ERROR:", e);
-    res.status(500).json({ ok: false, error: "forgot-password failed" });
+    return res.status(500).json({
+      ok: false,
+      error: "forgot-password failed",
+    });
   }
 });
 
