@@ -587,3 +587,21 @@ app.post("/api/generate-image", authMiddleware, async (req, res) => {
 app.listen(PORT, () => {
   console.log(`🚀 AI backend running on port ${PORT}`);
 });
+
+app.get("/api/debug/users", async (req, res) => {
+  try {
+    const result = await pool.query(
+      "SELECT id, email, role, tokens FROM users ORDER BY id"
+    );
+
+    res.json({
+      ok: true,
+      users: result.rows,
+    });
+  } catch (e) {
+    res.status(500).json({
+      ok: false,
+      error: e.message,
+    });
+  }
+});
