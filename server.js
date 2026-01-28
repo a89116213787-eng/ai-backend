@@ -605,3 +605,16 @@ app.get("/api/debug/users", async (req, res) => {
     });
   }
 });
+
+await pool.query(`
+CREATE TABLE IF NOT EXISTS payments (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id),
+  amount INTEGER NOT NULL,
+  tokens INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  provider TEXT NOT NULL DEFAULT 'yookassa',
+  provider_payment_id TEXT,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+`);
