@@ -114,6 +114,42 @@ app.post("/api/billing/webhook", async (req, res) => {
   }
 });
 
+// ===============================
+// 💳 МОИ ПЛАТЕЖИ
+// ===============================
+app.get("/api/payments/my", authMiddleware, async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    const result = await pool.query(
+      `
+      SELECT
+        id,
+        amount,
+        tokens,
+        status,
+        provider,
+        created_at
+      FROM payments
+      WHERE user_id = $1
+      ORDER BY created_at DESC
+      `,
+      [userId]
+    );
+
+    res.json({
+      ok: true,
+      payments: result.rows,
+    });
+  } catch (e) {
+    console.error("PAYMENTS MY ERROR:", e);
+    res.status(500).json({
+      ok: false,
+      error: "Не удалось получить платежи",
+    });
+  }
+});
+
 // ======================================================
 // SERVICE: ADD TOKENS (ADMIN ONLY)  🔥 ШАГ 3.1
 // ======================================================
