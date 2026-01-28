@@ -698,3 +698,69 @@ app.post("/api/payments/create", authMiddleware, async (req, res) => {
     });
   }
 });
+
+// ======================================================
+// 💰 MOCK PAYMENT CONFIRM (как webhook ЮKassa)
+// ======================================================
+app.post("/api/payments/mock-paid", authMiddleware, async (req, res) => {
+  try {
+    const { payment_id } = req.body;
+
+    if (!payment_id) {
+      return res.status(400).json({
+        ok: false,
+        error: "payment_id обязателен",
+      });
+    }
+
+    // 1️⃣ получаем платёж
+    const paymentRes = await pool.query(
+      `SELECT * FROM payments WHERE id = $1`,
+      [payment_id]
+    );
+
+    if (paymentRes.rows.length === 0) {
+      return res.status(404).json({
+        ok: false,
+        error: "Платёж не найден",
+      });
+    }
+
+    const payment = paymentRes.rows[0];
+
+    if (payment.status === "paid") {
+      return res.json({
+        ok: true,
+        message: "Платёж уже подтверждён",
+      });
+    }
+
+    // 2️⃣ обновляем статус платежа
+    await pool.query(
+      `UPDATE payments SET status = 'paid' WHERE id = $1`,
+      [payment_id]
+    );
+
+    // 3️⃣ начисляем токены пользователю
+    await pool.query(
+      `
+      UPDATE users
+      SET tokens = tokens + $1
+      WHERE id = $2
+      `,
+      [payment.tokens, payment.user_id]
+    );
+
+    res.json({
+      ok: true,
+      message: "Платёж подтверждён, токены начислены",
+    });
+  } catch (e) {
+    console.error("MOCK PAID ERROR:", e);
+
+    res.status(500).json({
+      ok: false,
+      error: "Ошибка подтверждения платежа",
+    });
+  }
+});
