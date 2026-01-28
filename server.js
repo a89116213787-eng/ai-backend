@@ -605,3 +605,60 @@ app.get("/api/debug/users", async (req, res) => {
     });
   }
 });
+
+// ======================================================
+// PAYMENTS — CREATE (без ЮKassa, архитектура)
+// ======================================================
+app.post("/api/payments/create", authMiddleware, async (req, res) => {
+  try {
+    const { tariffId } = req.body;
+    const userId = req.user.id;
+
+    // 🔒 защита
+    if (!tariffId) {
+      return res.status(400).json({
+        ok: false,
+        error: "tariffId required",
+      });
+    }
+
+    // 🎯 тарифы (временно хардкод)
+    const TARIFFS = {
+      starter: { price: 199, tokens: 50 },
+      pro: { price: 499, tokens: 200 },
+      max: { price: 999, tokens: 500 },
+    };
+
+    const tariff = TARIFFS[tariffId];
+
+    if (!tariff) {
+      return res.status(400).json({
+        ok: false,
+        error: "invalid tariff",
+      });
+    }
+
+    // 💾 создаём платеж
+    const result = await pool.query(
+      `
+      INSERT INTO payments (user_id, amount, tokens, status, provider)
+      VALUES ($1, $2, $3, 'pending', 'yookassa')
+      RETURNING *
+      `,
+      [userId, tariff.price, tariff.tokens]
+    );
+
+    return res.json({
+      ok: true,
+      payment: result.rows[0],
+      message: "Payment created (waiting for YooKassa)",
+    });
+
+  } catch (e) {
+    console.error("CREATE PAYMENT ERROR:", e);
+    res.status(500).json({
+      ok: false,
+      error: "payment create failed",
+    });
+  }
+});
