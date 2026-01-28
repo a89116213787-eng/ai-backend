@@ -700,6 +700,75 @@ app.post("/api/payments/create", authMiddleware, async (req, res) => {
 });
 
 // ======================================================
+// YOOKASSA WEBHOOK (БОЕВОЙ)
+// ======================================================
+app.post("/api/payments/webhook/yookassa", async (req, res) => {
+  try {
+    const event = req.body;
+
+    // интересует только успешная оплата
+    if (event.event !== "payment.succeeded") {
+      return res.json({ ok: true });
+    }
+
+    const paymentObject = event.object;
+
+    const paymentId = paymentObject.metadata?.payment_id;
+
+    if (!paymentId) {
+      return res.status(400).json({
+        ok: false,
+        error: "payment_id not found in metadata",
+      });
+    }
+
+    // проверяем платёж
+    const result = await pool.query(
+      "SELECT * FROM payments WHERE id = $1",
+      [paymentId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        ok: false,
+        error: "payment not found",
+      });
+    }
+
+    const payment = result.rows[0];
+
+    // защита от двойного вебхука
+    if (payment.status === "paid") {
+      return res.json({ ok: true, alreadyProcessed: true });
+    }
+
+    // отмечаем платёж
+    await pool.query(
+      "UPDATE payments SET status = 'paid', provider_payment_id = $1 WHERE id = $2",
+      [paymentObject.id, paymentId]
+    );
+
+    // начисляем токены
+    await pool.query(
+      "UPDATE users SET tokens = tokens + $1 WHERE id = $2",
+      [payment.tokens, payment.user_id]
+    );
+
+    // лог
+    await pool.query(
+      `INSERT INTO token_logs (user_id, change, reason)
+       VALUES ($1, $2, 'payment')`,
+      [payment.user_id, payment.tokens]
+    );
+
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error("YOOKASSA WEBHOOK ERROR:", e);
+    res.status(500).json({ ok: false });
+  }
+});
+
+// ======================================================
 // 💰 MOCK PAYMENT CONFIRM (как webhook ЮKassa)
 // ======================================================
 app.post("/api/payments/mock-paid", authMiddleware, async (req, res) => {
