@@ -324,6 +324,29 @@ app.post("/api/auth/login", async (req, res) => {
   }
 });
 
+app.get("/api/user/balance", authMiddleware, async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    const result = await pool.query(
+      "SELECT tokens FROM users WHERE id = $1",
+      [userId]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ ok: false });
+    }
+
+    res.json({
+      ok: true,
+      tokens: result.rows[0].tokens,
+    });
+  } catch (e) {
+    console.error("BALANCE ERROR:", e);
+    res.status(500).json({ ok: false });
+  }
+});
+
 // ======================================================
 // PASSWORD RESET — REQUEST
 // ======================================================
