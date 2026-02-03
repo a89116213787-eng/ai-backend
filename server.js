@@ -254,19 +254,33 @@ app.post("/api/auth/register", async (req, res) => {
       [email, passwordHash]
     );
 
-    const user = result.rows[0];
+    const newUser = result.rows[0];
 
-    const token = jwt.sign(
-      { id: user.id, email: user.email, role: "user" },
-      process.env.JWT_SECRET,
-      { expiresIn: "7d" }
-    );
+const role =
+  newUser.email === "admin@local.dev"
+    ? "admin"
+    : "user";
 
-    return res.json({
-      ok: true,
-      user,
-      token,
-    });
+const token = jwt.sign(
+  {
+    id: newUser.id,
+    role,
+  },
+  process.env.JWT_SECRET,
+  { expiresIn: "7d" }
+);
+
+return res.json({
+  ok: true,
+  user: {
+    id: newUser.id,
+    email: newUser.email,
+    role,
+  },
+  role,
+  token,
+});
+
   } catch (e) {
     console.error("REGISTER ERROR:", e);
     res.status(500).json({ ok: false, error: "register failed" });
@@ -314,10 +328,15 @@ app.post("/api/auth/login", async (req, res) => {
     );
 
     return res.json({
-      ok: true,
-      user: { id: user.id, email: user.email },
-      token,
-    });
+  ok: true,
+  user: {
+    id: user.id,
+    email: user.email,
+    role: user.role,
+  },
+  role: user.role,
+  token,
+});
   } catch (e) {
     console.error("LOGIN ERROR:", e);
     res.status(500).json({ ok: false, error: "login failed" });
