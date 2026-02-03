@@ -856,3 +856,34 @@ app.post("/api/payments/mock-paid", authMiddleware, async (req, res) => {
     });
   }
 });
+
+// ======================================================
+// PAYMENTS — HISTORY (USER)
+// ======================================================
+app.get("/api/payments/history", authMiddleware, async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    const result = await pool.query(
+      `SELECT 
+         id,
+         amount,
+         tokens,
+         status,
+         provider,
+         created_at
+       FROM payments
+       WHERE user_id = $1
+       ORDER BY created_at DESC`,
+      [userId]
+    );
+
+    return res.json({
+      ok: true,
+      payments: result.rows,
+    });
+  } catch (e) {
+    console.error("PAYMENTS HISTORY ERROR:", e);
+    res.status(500).json({ ok: false, error: "history failed" });
+  }
+});
