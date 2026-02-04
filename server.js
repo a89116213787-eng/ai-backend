@@ -247,40 +247,32 @@ app.post("/api/auth/register", async (req, res) => {
 
     const passwordHash = await bcrypt.hash(password, 10);
 
+    const role = email === "admin@local.dev" ? "admin" : "user";
+
     const result = await pool.query(
-      `INSERT INTO users (email, password_hash)
-       VALUES ($1, $2)
-       RETURNING id, email`,
-      [email, passwordHash]
+      `INSERT INTO users (email, password_hash, role)
+       VALUES ($1, $2, $3)
+       RETURNING id, email, role`,
+      [email, passwordHash, role]
     );
 
-    const newUser = result.rows[0];
+    const user = result.rows[0];
 
-const role =
-  newUser.email === "admin@local.dev"
-    ? "admin"
-    : "user";
+    const token = jwt.sign(
+      {
+        id: user.id,
+        email: user.email,
+        role: user.role,
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: "7d" }
+    );
 
-const token = jwt.sign(
-  {
-    id: newUser.id,
-    role,
-  },
-  process.env.JWT_SECRET,
-  { expiresIn: "7d" }
-);
-
-return res.json({
-  ok: true,
-  user: {
-    id: newUser.id,
-    email: newUser.email,
-    role,
-  },
-  role,
-  token,
-});
-
+    return res.json({
+      ok: true,
+      user,
+      token,
+    });
   } catch (e) {
     console.error("REGISTER ERROR:", e);
     res.status(500).json({ ok: false, error: "register failed" });
