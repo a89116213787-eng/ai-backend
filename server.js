@@ -319,14 +319,14 @@ app.post("/api/auth/login", async (req, res) => {
       { expiresIn: "7d" }
     );
 
-    return res.json({
+   return res.json({
   ok: true,
   user: {
-    id: newUser.id,
-    email: newUser.email,
-    role,
+    id: user.id,
+    email: user.email,
+    role: user.role,
   },
-  role,
+  role: user.role,
   token,
 });
 
