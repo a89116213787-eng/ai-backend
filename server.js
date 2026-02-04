@@ -330,13 +330,14 @@ app.post("/api/auth/login", async (req, res) => {
     return res.json({
   ok: true,
   user: {
-    id: user.id,
-    email: user.email,
-    role: user.role,
+    id: newUser.id,
+    email: newUser.email,
+    role,
   },
-  role: user.role,
+  role,
   token,
 });
+
   } catch (e) {
     console.error("LOGIN ERROR:", e);
     res.status(500).json({ ok: false, error: "login failed" });
