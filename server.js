@@ -151,6 +151,43 @@ app.get("/api/payments/my", authMiddleware, async (req, res) => {
 });
 
 // ======================================================
+// 💳 PAYMENTS — ADMIN (ALL USERS)
+// ======================================================
+app.get("/api/admin/payments", authMiddleware, async (req, res) => {
+  try {
+    // 🔐 только админ
+    if (req.user.role !== "admin") {
+      return res.status(403).json({ ok: false, error: "forbidden" });
+    }
+
+    const result = await pool.query(`
+      SELECT
+        p.id,
+        u.email,
+        p.amount,
+        p.tokens,
+        p.status,
+        p.provider,
+        p.created_at
+      FROM payments p
+      JOIN users u ON u.id = p.user_id
+      ORDER BY p.created_at DESC
+    `);
+
+    return res.json({
+      ok: true,
+      payments: result.rows,
+    });
+  } catch (e) {
+    console.error("ADMIN PAYMENTS ERROR:", e);
+    res.status(500).json({
+      ok: false,
+      error: "admin payments failed",
+    });
+  }
+});
+
+// ======================================================
 // SERVICE: ADD TOKENS (ADMIN ONLY)  🔥 ШАГ 3.1
 // ======================================================
 app.post("/api/admin/add-tokens", authMiddleware, async (req, res) => {
