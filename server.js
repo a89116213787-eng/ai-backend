@@ -612,30 +612,42 @@ app.post("/api/promo/consume", (req, res) => {
 const generationCooldown = new Map(); // userId -> timestamp
 const GENERATION_DELAY_MS = 8000; // 8 секунд между генерациями
 
-// ==================
-// GEMINI PROXY (JWT)
-// ==================
-app.post("/api/generate-image", authMiddleware, rateLimitMiddleware, async (req, res) => {
+// ===============================
+// RATE LIMIT MIDDLEWARE
+// ===============================
+function rateLimitMiddleware(req, res, next) {
   try {
-    const { prompt } = req.body;
-    let { requestId } = req.body;
-    const { id, role } = req.user;
+    const { id } = req.user;
 
-        // =========================
-    // ⏱ RATE LIMIT
-    // =========================
     const now = Date.now();
     const last = generationCooldown.get(id);
 
     if (last && now - last < GENERATION_DELAY_MS) {
       const wait = Math.ceil((GENERATION_DELAY_MS - (now - last)) / 1000);
+
       return res.status(429).json({
         error: "too_many_requests",
-        message: `Подождите ${wait} сек перед следующей генерацией`
+        message: `Подождите ${wait} сек перед следующей генерацией`,
       });
     }
 
     generationCooldown.set(id, now);
+    next();
+
+  } catch (e) {
+    console.error("RATE LIMIT ERROR:", e);
+    next();
+  }
+}
+
+// ==================
+// GEMINI PROXY (JWT)
+// ==================
+app.post("/api/generate-image", authMiddleware, async (req, res) => {
+  try {
+    const { prompt } = req.body;
+    let { requestId } = req.body;
+    const { id, role } = req.user;
 
     // ======================================
     // 🔎 ВАЛИДАЦИЯ
@@ -667,6 +679,23 @@ app.post("/api/generate-image", authMiddleware, rateLimitMiddleware, async (req,
       }
       throw e;
     }
+
+    // ======================================
+// ⏱ RATE LIMIT (ПОСЛЕ anti-duplicate)
+// ======================================
+const now = Date.now();
+const last = generationCooldown.get(id);
+
+if (last && now - last < GENERATION_DELAY_MS) {
+  const wait = Math.ceil((GENERATION_DELAY_MS - (now - last)) / 1000);
+
+  return res.status(429).json({
+    error: "too_many_requests",
+    message: `Подождите ${wait} сек перед следующей генерацией`,
+  });
+}
+
+generationCooldown.set(id, now);
 
     // ======================================
     // 🔐 ПРОВЕРКА ПРАВ
