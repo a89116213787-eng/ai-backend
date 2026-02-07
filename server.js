@@ -68,6 +68,42 @@ function authMiddleware(req, res, next) {
   }
 }
 
+// ==================
+// 🔐 ADMIN ONLY MIDDLEWARE
+// ==================
+function requireAdmin(req, res, next) {
+  if (req.user.role !== "admin") {
+    return res.status(403).json({
+      ok: false,
+      error: "admin access required",
+    });
+  }
+  next();
+}
+
+// ==================
+// 🔐 OWNER OR ADMIN
+// пользователь может работать только со своими данными
+// ==================
+function requireSelfOrAdmin(getUserId) {
+  return (req, res, next) => {
+    const targetUserId = getUserId(req);
+
+    if (req.user.role === "admin") {
+      return next();
+    }
+
+    if (req.user.id !== targetUserId) {
+      return res.status(403).json({
+        ok: false,
+        error: "forbidden",
+      });
+    }
+
+    next();
+  };
+}
+
 // ======================================================
 // BILLING WEBHOOK (SBP / PAYMENTS)
 // ======================================================
@@ -190,7 +226,7 @@ app.get("/api/admin/payments", authMiddleware, async (req, res) => {
 // ======================================================
 // SERVICE: ADD TOKENS (ADMIN ONLY)  🔥 ШАГ 3.1
 // ======================================================
-app.post("/api/admin/add-tokens", authMiddleware, async (req, res) => {
+app.post("/api/admin/add-tokens", authMiddleware, requireAdmin, async (req, res) => {
   try {
     const { userId, amount } = req.body;
 
@@ -696,7 +732,7 @@ app.listen(PORT, () => {
   console.log(`🚀 AI backend running on port ${PORT}`);
 });
 
-app.get("/api/debug/users", async (req, res) => {
+app.get("/api/debug/users", authMiddleware, requireAdmin, async (req, res) => {
   try {
     const result = await pool.query(
       "SELECT id, email, role, tokens FROM users ORDER BY id"
