@@ -606,6 +606,12 @@ app.post("/api/promo/consume", (req, res) => {
   }
 });
 
+// ===============================
+// RATE LIMIT (ANTI-SPAM GENERATION)
+// ===============================
+const generationCooldown = new Map(); // userId -> timestamp
+const GENERATION_DELAY_MS = 8000; // 8 секунд между генерациями
+
 // ==================
 // GEMINI PROXY (JWT)
 // ==================
@@ -614,6 +620,22 @@ app.post("/api/generate-image", authMiddleware, async (req, res) => {
     const { prompt } = req.body;
     let { requestId } = req.body;
     const { id, role } = req.user;
+
+        // =========================
+    // ⏱ RATE LIMIT
+    // =========================
+    const now = Date.now();
+    const last = generationCooldown.get(id);
+
+    if (last && now - last < GENERATION_DELAY_MS) {
+      const wait = Math.ceil((GENERATION_DELAY_MS - (now - last)) / 1000);
+      return res.status(429).json({
+        error: "too_many_requests",
+        message: `Подождите ${wait} сек перед следующей генерацией`
+      });
+    }
+
+    generationCooldown.set(id, now);
 
     // ======================================
     // 🔎 ВАЛИДАЦИЯ
