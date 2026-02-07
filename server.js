@@ -615,7 +615,7 @@ const GENERATION_DELAY_MS = 8000; // 8 секунд между генераци�
 // ==================
 // GEMINI PROXY (JWT)
 // ==================
-app.post("/api/generate-image", authMiddleware, async (req, res) => {
+app.post("/api/generate-image", authMiddleware, rateLimitMiddleware, async (req, res) => {
   try {
     const { prompt } = req.body;
     let { requestId } = req.body;
