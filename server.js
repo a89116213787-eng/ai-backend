@@ -703,29 +703,41 @@ generationCooldown.set(id, now);
     // 🔐 ПРОВЕРКА ПРАВ
     // ======================================
     if (role !== "admin") {
-      const result = await pool.query(
-        "SELECT tokens FROM users WHERE id = $1",
-        [id]
-      );
 
-      if (result.rows.length === 0) {
-        return res.status(401).json({ error: "user not found" });
-      }
+  // 🔒 АТОМАРНОЕ СПИСАНИЕ
+  const debit = await pool.query(
+    `
+    UPDATE users
+    SET tokens = tokens - 1
+    WHERE id = $1 AND tokens > 0
+    RETURNING tokens
+    `,
+    [id]
+  );
 
-      const tokens = result.rows[0].tokens;
+  // если 0 строк — токенов не было
+  if (debit.rowCount === 0) {
+    return res.status(403).json({
+      error: "no_tokens",
+      message: "Токены закончились. Купите тариф.",
+    });
+  }
 
-      if (tokens <= 0) {
-        return res.status(403).json({
-          error: "no tokens",
-          message: "Токены закончились. Купите тариф.",
-        });
-      }
+  // 📝 лог
+  await pool.query(
+    `INSERT INTO token_logs (user_id, change, reason)
+     VALUES ($1, $2, $3)`,
+    [id, -1, "generation"]
+  );
 
-      // ⬇️ списываем 1 токен
-      await pool.query(
-        "UPDATE users SET tokens = tokens - 1 WHERE id = $1",
-        [id]
-      );
+} else {
+  // лог для админа
+  await pool.query(
+    `INSERT INTO token_logs (user_id, change, reason)
+     VALUES ($1, $2, $3)`,
+    [id, 0, "admin_generation"]
+  );
+}
 
       // 📝 логируем
       await pool.query(
