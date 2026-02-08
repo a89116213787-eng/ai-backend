@@ -699,12 +699,12 @@ if (last && now - last < GENERATION_DELAY_MS) {
 
 generationCooldown.set(id, now);
 
-    // ======================================
-    // 🔐 ПРОВЕРКА ПРАВ
-    // ======================================
-    if (role !== "admin") {
+// ======================================
+// 🔐 ПРОВЕРКА ПРАВ + АТОМАРНОЕ СПИСАНИЕ
+// ======================================
+if (role !== "admin") {
 
-  // 🔒 АТОМАРНОЕ СПИСАНИЕ
+  // списываем 1 токен ТОЛЬКО если он есть
   const debit = await pool.query(
     `
     UPDATE users
@@ -715,7 +715,7 @@ generationCooldown.set(id, now);
     [id]
   );
 
-  // если 0 строк — токенов не было
+  // если токенов не было
   if (debit.rowCount === 0) {
     return res.status(403).json({
       error: "no_tokens",
@@ -723,36 +723,23 @@ generationCooldown.set(id, now);
     });
   }
 
-  // 📝 лог
+  // лог
   await pool.query(
     `INSERT INTO token_logs (user_id, change, reason)
-     VALUES ($1, $2, $3)`,
-    [id, -1, "generation"]
+     VALUES ($1, $2, 'generation')`,
+    [id, -1]
   );
 
 } else {
-  // лог для админа
+
+  // админ не тратит токены
   await pool.query(
     `INSERT INTO token_logs (user_id, change, reason)
-     VALUES ($1, $2, $3)`,
-    [id, 0, "admin_generation"]
+     VALUES ($1, 0, 'admin_generation')`,
+    [id]
   );
-}
 
-      // 📝 логируем
-      await pool.query(
-        `INSERT INTO token_logs (user_id, change, reason)
-         VALUES ($1, $2, $3)`,
-        [id, -1, "generation"]
-      );
-    } else {
-      // лог для админа (не списываем)
-      await pool.query(
-        `INSERT INTO token_logs (user_id, change, reason)
-         VALUES ($1, $2, $3)`,
-        [id, 0, "admin_generation"]
-      );
-    }
+}
 
     // ======================================
     // 🤖 ГЕНЕРАЦИЯ
