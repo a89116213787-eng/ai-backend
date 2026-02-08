@@ -12,6 +12,16 @@ import { sendMail } from "./src/services/mailClient.js";
 
 dotenv.config();
 
+// ===============================
+// REQUEST SIGNATURE SECRET
+// ===============================
+const REQUEST_SECRET = process.env.REQUEST_SECRET;
+
+if (!REQUEST_SECRET) {
+  console.error("❌ REQUEST_SECRET is missing in ENV");
+  process.exit(1);
+}
+
 // ==================
 // DB CONNECTION  ✅ КРИТИЧНО ДОБАВЛЕНО
 // ==================
@@ -65,6 +75,35 @@ function authMiddleware(req, res, next) {
     next();
   } catch (e) {
     return res.status(401).json({ ok: false, error: "invalid token" });
+  }
+}
+
+// ===============================
+// VERIFY SIGNATURE (anti-abuse)
+// ===============================
+function verifyRequestSignature(req, res, next) {
+  try {
+    const signature = req.headers["x-request-sign"];
+
+    if (!signature) {
+      return res.status(401).json({ error: "signature_missing" });
+    }
+
+    const crypto = require("crypto");
+
+    const expected = crypto
+      .createHmac("sha256", REQUEST_SECRET)
+      .update(JSON.stringify(req.body))
+      .digest("hex");
+
+    if (signature !== expected) {
+      return res.status(401).json({ error: "bad_signature" });
+    }
+
+    next();
+  } catch (e) {
+    console.error("SIGNATURE ERROR:", e);
+    res.status(500).json({ error: "signature_error" });
   }
 }
 
@@ -182,43 +221,6 @@ app.get("/api/payments/my", authMiddleware, async (req, res) => {
     res.status(500).json({
       ok: false,
       error: "Не удалось получить платежи",
-    });
-  }
-});
-
-// ======================================================
-// 💳 PAYMENTS — ADMIN (ALL USERS)
-// ======================================================
-app.get("/api/admin/payments", authMiddleware, async (req, res) => {
-  try {
-    // 🔐 только админ
-    if (req.user.role !== "admin") {
-      return res.status(403).json({ ok: false, error: "forbidden" });
-    }
-
-    const result = await pool.query(`
-      SELECT
-        p.id,
-        u.email,
-        p.amount,
-        p.tokens,
-        p.status,
-        p.provider,
-        p.created_at
-      FROM payments p
-      JOIN users u ON u.id = p.user_id
-      ORDER BY p.created_at DESC
-    `);
-
-    return res.json({
-      ok: true,
-      payments: result.rows,
-    });
-  } catch (e) {
-    console.error("ADMIN PAYMENTS ERROR:", e);
-    res.status(500).json({
-      ok: false,
-      error: "admin payments failed",
     });
   }
 });
@@ -643,7 +645,7 @@ function rateLimitMiddleware(req, res, next) {
 // ==================
 // GEMINI PROXY (JWT)
 // ==================
-app.post("/api/generate-image", authMiddleware, async (req, res) => {
+app.post("/api/generate-image", authMiddleware, verifyRequestSignature, async (req, res) => {
   try {
     const { prompt } = req.body;
     let { requestId } = req.body;
