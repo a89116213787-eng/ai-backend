@@ -15,12 +15,12 @@ dotenv.config();
 // ===============================
 // REQUEST SIGNATURE SECRET
 // ===============================
-const REQUEST_SECRET = process.env.REQUEST_SECRET;
+// const REQUEST_SECRET = process.env.REQUEST_SECRET;
 
-if (!REQUEST_SECRET) {
-  console.error("❌ REQUEST_SECRET is missing in ENV");
-  process.exit(1);
-}
+// if (!REQUEST_SECRET) {
+ // console.error("❌ REQUEST_SECRET is missing in ENV");
+ // process.exit(1);
+//}
 
 // ==================
 // DB CONNECTION  ✅ КРИТИЧНО ДОБАВЛЕНО
