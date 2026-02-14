@@ -645,7 +645,7 @@ function rateLimitMiddleware(req, res, next) {
 // ==================
 // GEMINI PROXY (JWT)
 // ==================
-app.post("/api/generate-image", authMiddleware, verifyRequestSignature, async (req, res) => {
+app.post("/api/generate-image", authMiddleware, async (req, res) => {
   try {
     const { prompt } = req.body;
     let { requestId } = req.body;
