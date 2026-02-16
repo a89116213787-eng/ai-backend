@@ -434,6 +434,14 @@ app.get("/api/user/balance", authMiddleware, async (req, res) => {
   }
 });
 
+app.get("/api/user/me", authMiddleware, async (req, res) => {
+  res.json({
+    ok: true,
+    email: req.user.email,
+    id: req.user.id
+  });
+});
+
 // ======================================================
 // PASSWORD RESET — REQUEST
 // ======================================================
