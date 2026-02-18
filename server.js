@@ -41,9 +41,6 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
 
-import paymentsRouter from "./payments.js";
-app.use("/api/payments", paymentsRouter(pool, authMiddleware));
-
 const PORT = process.env.PORT || 3000;
 
 // --- Проверка наличия ключа ---
@@ -80,6 +77,9 @@ function authMiddleware(req, res, next) {
     return res.status(401).json({ ok: false, error: "invalid token" });
   }
 }
+
+import paymentsRouter from "./payments.js";
+app.use("/api/payments", paymentsRouter(pool, authMiddleware));
 
 // ===============================
 // VERIFY SIGNATURE (anti-abuse)
