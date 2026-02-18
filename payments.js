@@ -1,8 +1,8 @@
 import express from "express";
-import pool from "../db.js";
 import auth from "../middleware/auth.js";
 
-const router = express.Router();
+export default function paymentsRouter(pool) {
+  const router = express.Router();
 
 /*
 POST /api/payments/create
@@ -44,4 +44,5 @@ router.post("/create", auth, async (req, res) => {
   }
 });
 
-export default router;
+return router;
+}
