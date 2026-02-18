@@ -450,6 +450,38 @@ app.get("/api/user/me", authMiddleware, async (req, res) => {
 });
 
 // ======================================================
+// 🖼 USER GENERATIONS HISTORY
+// ======================================================
+app.get("/api/user/generations", authMiddleware, async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    const result = await pool.query(
+      `
+      SELECT id, prompt, image_url, created_at
+      FROM generations
+      WHERE user_id = $1
+      ORDER BY created_at DESC
+      LIMIT 50
+      `,
+      [userId]
+    );
+
+    res.json({
+      ok: true,
+      items: result.rows,
+    });
+
+  } catch (e) {
+    console.error("USER GENERATIONS ERROR:", e);
+    res.status(500).json({
+      ok: false,
+      error: "failed to load generations",
+    });
+  }
+});
+
+// ======================================================
 // PASSWORD RESET — REQUEST
 // ======================================================
 app.post("/api/auth/forgot-password", async (req, res) => {
@@ -774,50 +806,56 @@ if (role !== "admin") {
 
     const response = await result.response;
 
-// ======================================
-// 💾 СОХРАНЯЕМ В ИСТОРИЮ (ОБЯЗАТЕЛЬНО ДО ОТВЕТА)
-// ======================================
-let imageUrl = null;
+    // ======================================
+    // 💾 СОХРАНЯЕМ В ИСТОРИЮ
+    // ======================================
+    let imageUrl = null;
 
-try {
-  const parts = response?.candidates?.[0]?.content?.parts || [];
+    try {
+      const parts = response?.candidates?.[0]?.content?.parts || [];
 
-  const imagePart =
-    parts.find(p => p.inlineData?.data) ||
-    parts.find(p => p.inline_data?.data);
+      const imagePart =
+        parts.find(p => p.inlineData?.data) ||
+        parts.find(p => p.inline_data?.data);
 
-  if (imagePart) {
-    const base64 =
-      imagePart.inlineData?.data ||
-      imagePart.inline_data?.data;
+      if (imagePart) {
 
-    const mime =
-      imagePart.inlineData?.mimeType ||
-      imagePart.inline_data?.mime_type ||
-      "image/png";
+        const base64 =
+          imagePart.inlineData?.data ||
+          imagePart.inline_data?.data;
 
-    imageUrl = `data:${mime};base64,${base64}`;
+        const mime =
+          imagePart.inlineData?.mimeType ||
+          imagePart.inline_data?.mime_type ||
+          "image/png";
 
-    await pool.query(
-      `INSERT INTO generations (user_id, prompt, image_url)
-       VALUES ($1, $2, $3)`,
-      [id, prompt, imageUrl]
-    );
+        imageUrl = `data:${mime};base64,${base64}`;
 
-    console.log("🧠 generation saved for user", id);
-  }
+        await pool.query(
+          `INSERT INTO generations (user_id, prompt, image_url)
+           VALUES ($1, $2, $3)`,
+          [id, prompt, imageUrl]
+        );
 
-} catch (e) {
-  console.error("SAVE GENERATION ERROR:", e);
+        console.log("🧠 generation saved for user", id);
+
+      } else {
+
+  console.log("⚠️ Gemini returned no image — generation not saved");
+
 }
 
-// ======================================
-// ТОЛЬКО ПОСЛЕ ЭТОГО ОТВЕТ
-// ======================================
-res.json({
-  ok: true,
-  data: response,
-});
+    } catch (e) {
+      console.error("SAVE GENERATION ERROR:", e);
+    }
+
+    // ======================================
+    // ОТВЕТ КЛИЕНТУ (ВСЕГДА!)
+    // ======================================
+    res.json({
+      ok: true,
+      data: response,
+    });
 
   } catch (err) {
     console.error("Gemini error:", err?.message || err);
