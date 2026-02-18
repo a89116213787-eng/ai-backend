@@ -774,10 +774,51 @@ if (role !== "admin") {
 
     const response = await result.response;
 
-    res.json({
-      ok: true,
-      data: response,
-    });
+// ======================================
+// 💾 СОХРАНЯЕМ В ИСТОРИЮ (ОБЯЗАТЕЛЬНО ДО ОТВЕТА)
+// ======================================
+let imageUrl = null;
+
+try {
+  const parts = response?.candidates?.[0]?.content?.parts || [];
+
+  const imagePart =
+    parts.find(p => p.inlineData?.data) ||
+    parts.find(p => p.inline_data?.data);
+
+  if (imagePart) {
+    const base64 =
+      imagePart.inlineData?.data ||
+      imagePart.inline_data?.data;
+
+    const mime =
+      imagePart.inlineData?.mimeType ||
+      imagePart.inline_data?.mime_type ||
+      "image/png";
+
+    imageUrl = `data:${mime};base64,${base64}`;
+
+    await pool.query(
+      `INSERT INTO generations (user_id, prompt, image_url)
+       VALUES ($1, $2, $3)`,
+      [id, prompt, imageUrl]
+    );
+
+    console.log("🧠 generation saved for user", id);
+  }
+
+} catch (e) {
+  console.error("SAVE GENERATION ERROR:", e);
+}
+
+// ======================================
+// ТОЛЬКО ПОСЛЕ ЭТОГО ОТВЕТ
+// ======================================
+res.json({
+  ok: true,
+  data: response,
+});
+
   } catch (err) {
     console.error("Gemini error:", err?.message || err);
 
