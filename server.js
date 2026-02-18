@@ -41,7 +41,7 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
 
-import paymentsRouter from "./routes/payments.js";
+import paymentsRouter from "./payments.js";
 app.use("/api/payments", paymentsRouter(pool));
 
 const PORT = process.env.PORT || 3000;
