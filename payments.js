@@ -1,14 +1,13 @@
 import express from "express";
-import auth from "../middleware/auth.js";
 
-export default function paymentsRouter(pool) {
+export default function paymentsRouter(pool, authMiddleware) {
   const router = express.Router();
 
 /*
 POST /api/payments/create
 Создать платеж
 */
-router.post("/create", auth, async (req, res) => {
+router.post("/create", authMiddleware, async (req, res) => {
   try {
     const userId = req.user.id;
     const amount = Number(req.body.amount);
