@@ -441,6 +441,44 @@ app.get("/api/user/balance", authMiddleware, async (req, res) => {
   }
 });
 
+// ===============================
+// 📅 SUBSCRIPTION STATUS
+// ===============================
+app.get("/api/user/subscription", authMiddleware, async (req, res) => {
+  try {
+    if (req.user.role === "admin") {
+      return res.json({
+        ok: true,
+        active: true,
+        admin: true,
+        expires_at: null
+      });
+    }
+
+    const sub = await pool.query(
+      "SELECT expires_at FROM subscriptions WHERE user_id = $1",
+      [req.user.id]
+    );
+
+    if (!sub.rows.length) {
+      return res.json({ ok: true, active: false });
+    }
+
+    const expires = new Date(sub.rows[0].expires_at);
+    const active = expires > new Date();
+
+    res.json({
+      ok: true,
+      active,
+      expires_at: expires
+    });
+
+  } catch (e) {
+    console.error("SUB STATUS ERROR:", e);
+    res.status(500).json({ ok: false });
+  }
+});
+
 app.get("/api/user/me", authMiddleware, async (req, res) => {
   res.json({
     ok: true,
