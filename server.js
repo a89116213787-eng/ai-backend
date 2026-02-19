@@ -1112,6 +1112,46 @@ app.post("/api/payments/mock-paid", authMiddleware, async (req, res) => {
       [payment.tokens, payment.user_id]
     );
 
+    // =======================
+// ПОДПИСКА (1 месяц доступа)
+// =======================
+
+const userId = payment.user_id;
+
+const sub = await pool.query(
+  `SELECT expires_at FROM subscriptions WHERE user_id=$1`,
+  [userId]
+);
+
+const now = new Date();
+
+if (sub.rows.length === 0) {
+  // подписки нет → создаём на 30 дней
+  const expires = new Date(now);
+  expires.setDate(expires.getDate() + 30);
+
+  await pool.query(
+    `INSERT INTO subscriptions (user_id, expires_at)
+     VALUES ($1, $2)`,
+    [userId, expires]
+  );
+
+} else {
+  const expires = new Date(sub.rows[0].expires_at);
+
+  // если подписка истекла → даём новый месяц
+  if (expires < now) {
+    const newExpire = new Date(now);
+    newExpire.setDate(newExpire.getDate() + 30);
+
+    await pool.query(
+      `UPDATE subscriptions SET expires_at=$1 WHERE user_id=$2`,
+      [newExpire, userId]
+    );
+  }
+  // если активна — НЕ продлеваем
+}
+
     res.json({
       ok: true,
       message: "Платёж подтверждён, токены начислены",
