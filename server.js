@@ -951,6 +951,44 @@ app.post("/api/payments/webhook/yookassa", async (req, res) => {
       [payment.tokens, payment.user_id]
     );
 
+// =======================
+// ПОДПИСКА
+// =======================
+
+// проверяем подписку
+const sub = await pool.query(
+  `SELECT expires_at FROM subscriptions WHERE user_id=$1`,
+  [userId]
+);
+
+const now = new Date();
+
+if (sub.rows.length === 0) {
+  // подписки нет → создаём на 30 дней
+  const expires = new Date(now);
+  expires.setDate(expires.getDate() + 30);
+
+  await pool.query(
+    `INSERT INTO subscriptions (user_id, expires_at)
+     VALUES ($1, $2)`,
+    [userId, expires]
+  );
+} else {
+  const expires = new Date(sub.rows[0].expires_at);
+
+  if (expires < now) {
+    // подписка закончилась → новая 30 дней
+    const newExpire = new Date(now);
+    newExpire.setDate(newExpire.getDate() + 30);
+
+    await pool.query(
+      `UPDATE subscriptions SET expires_at=$1 WHERE user_id=$2`,
+      [newExpire, userId]
+    );
+  }
+  // если активна — НЕ трогаем
+}
+
     // лог
     await pool.query(
       `INSERT INTO token_logs (user_id, change, reason)
