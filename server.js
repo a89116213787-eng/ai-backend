@@ -698,6 +698,24 @@ app.post("/api/generate-image", authMiddleware, async (req, res) => {
     let { requestId } = req.body;
     const { id, role } = req.user;
 
+// ===============================
+// 🔒 проверка подписки
+// ===============================
+if (role !== "admin") {
+
+  const sub = await pool.query(
+    "SELECT expires_at FROM subscriptions WHERE user_id = $1",
+    [id]
+  );
+
+  if (!sub.rows.length || new Date(sub.rows[0].expires_at) < new Date()) {
+    return res.status(403).json({
+      ok: false,
+      message: "Подписка закончилась. Купите тариф для продолжения."
+    });
+  }
+}
+
     // ======================================
     // 🔎 ВАЛИДАЦИЯ
     // ======================================
@@ -933,6 +951,7 @@ app.post("/api/payments/webhook/yookassa", async (req, res) => {
     }
 
     const payment = result.rows[0];
+    const userId = payment.user_id;
 
     // защита от двойного вебхука
     if (payment.status === "paid") {
