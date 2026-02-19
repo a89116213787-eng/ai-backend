@@ -29,30 +29,36 @@ router.post("/create", authMiddleware, async (req, res) => {
 
     const paymentId = result.rows[0].id;
 
-    // ===============================
-// 🔥 ПОДПИСКА (1 месяц)
+// ===============================
+// 🔥 ПОДПИСКА (1 месяц доступа)
 // ===============================
 
-// админ всегда активен
 const userRole = req.user.role;
 
 if (userRole !== "admin") {
 
   const sub = await pool.query(
-    "SELECT expires_at FROM subscriptions WHERE user_id = $1",
+    "SELECT id FROM subscriptions WHERE user_id = $1",
     [userId]
   );
 
   if (sub.rows.length === 0) {
+
+    // создаём доступ на 1 месяц
     await pool.query(
       `INSERT INTO subscriptions (user_id, expires_at)
        VALUES ($1, NOW() + INTERVAL '1 month')`,
       [userId]
     );
+
   } else {
+
+    // ВАЖНО: НЕ продлеваем!
+    // просто обновляем доступ на месяц от текущего момента
+
     await pool.query(
       `UPDATE subscriptions
-       SET expires_at = GREATEST(expires_at, NOW()) + INTERVAL '1 month'
+       SET expires_at = NOW() + INTERVAL '1 month'
        WHERE user_id = $1`,
       [userId]
     );
