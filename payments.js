@@ -55,21 +55,23 @@ router.post("/create", authMiddleware, async (req, res) => {
 
         // 🔥 ВОТ ЭТО ОБЯЗАТЕЛЬНО!
         receipt: {
-          customer: {
-            email: userEmail
-          },
-          items: [
-            {
-              description: `Токены (${tokens})`,
-              quantity: "1.00",
-              amount: {
-                value: amount.toFixed(2),
-                currency: "RUB"
-              },
-              vat_code: 1
-            }
-          ]
-        }
+  customer: {
+    email: userEmail
+  },
+  items: [
+    {
+      description: `Токены (${tokens})`,
+      quantity: "1.00",
+      amount: {
+        value: amount.toFixed(2),
+        currency: "RUB"
+      },
+      vat_code: 1,
+      payment_subject: "service",
+      payment_mode: "full_prepayment"
+    }
+  ]
+}
 
       },
       {
