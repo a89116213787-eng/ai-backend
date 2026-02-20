@@ -1,4 +1,6 @@
 import express from "express";
+import axios from "axios";
+import { v4 as uuidv4 } from "uuid";
 
 export default function paymentsRouter(pool, authMiddleware) {
   const router = express.Router();
@@ -22,12 +24,51 @@ router.post("/create", authMiddleware, async (req, res) => {
 
     const result = await pool.query(
       `INSERT INTO payments (user_id, amount, tokens, status, provider)
-       VALUES ($1, $2, $3, 'pending', 'mock')
+       VALUES ($1, $2, $3, 'pending', 'yookassa')
        RETURNING id`,
       [userId, amount, tokens]
     );
 
     const paymentId = result.rows[0].id;
+
+    // ===============================
+// 🔥 СОЗДАЁМ ПЛАТЁЖ В ЮKASSA
+// ===============================
+
+const yookassaResponse = await axios.post(
+  "https://api.yookassa.ru/v3/payments",
+  {
+    amount: {
+      value: amount.toFixed(2),
+      currency: "RUB"
+    },
+    confirmation: {
+      type: "redirect",
+      return_url: "https://dizain.pro/account/billing"
+    },
+    capture: true,
+    description: "Оплата тарифа dizAIn",
+    metadata: {
+      userId,
+      paymentId
+    }
+  },
+  {
+    auth: {
+      username: process.env.YOOKASSA_SHOP_ID,
+      password: process.env.YOOKASSA_SECRET_KEY
+    },
+    headers: {
+      "Idempotence-Key": uuidv4()
+    }
+  }
+);
+
+// сохраняем id платежа ЮKassa
+await pool.query(
+  `UPDATE payments SET external_id = $1 WHERE id = $2`,
+  [yookassaResponse.data.id, paymentId]
+);
 
 // ===============================
 // 🔥 ПОДПИСКА (1 месяц доступа)
@@ -67,7 +108,7 @@ if (userRole !== "admin") {
 
     return res.json({
       ok: true,
-      paymentId
+      confirmationUrl: yookassaResponse.data.confirmation.confirmation_url
     });
 
   } catch (e) {
