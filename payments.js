@@ -12,6 +12,7 @@ POST /api/payments/create
 router.post("/create", authMiddleware, async (req, res) => {
   try {
     const userId = req.user.id;
+    const userEmail = req.user.email;
     const amount = Number(req.body.amount);
     const tokens = Number(req.body.tokens);
 
@@ -22,6 +23,7 @@ router.post("/create", authMiddleware, async (req, res) => {
       });
     }
 
+    // создаём запись в БД
     const result = await pool.query(
       `INSERT INTO payments (user_id, amount, tokens, status, provider)
        VALUES ($1, $2, $3, 'pending', 'yookassa')
@@ -31,91 +33,76 @@ router.post("/create", authMiddleware, async (req, res) => {
 
     const paymentId = result.rows[0].id;
 
-    // ===============================
-// 🔥 СОЗДАЁМ ПЛАТЁЖ В ЮKASSA
-// ===============================
+    // ============================
+    // 💳 СОЗДАЕМ ПЛАТЕЖ В ЮKASSA
+    // ============================
 
-const yookassaResponse = await axios.post(
-  "https://api.yookassa.ru/v3/payments",
-  {
-    amount: {
-      value: amount.toFixed(2),
-      currency: "RUB"
-    },
-    confirmation: {
-      type: "redirect",
-      return_url: "https://dizain.pro/account/billing"
-    },
-    capture: true,
-    description: "Оплата тарифа dizAIn",
-    metadata: {
-      userId,
-      paymentId
-    }
-  },
-  {
-    auth: {
-      username: process.env.YOOKASSA_SHOP_ID,
-      password: process.env.YOOKASSA_SECRET_KEY
-    },
-    headers: {
-      "Idempotence-Key": uuidv4()
-    }
-  }
-);
+    const yooResponse = await axios.post(
+      "https://api.yookassa.ru/v3/payments",
+      {
+        amount: {
+          value: amount.toFixed(2),
+          currency: "RUB"
+        },
 
-// сохраняем id платежа ЮKassa
-await pool.query(
-  `UPDATE payments SET external_id = $1 WHERE id = $2`,
-  [yookassaResponse.data.id, paymentId]
-);
+        confirmation: {
+          type: "redirect",
+          return_url: "https://dizain.pro/account/billing"
+        },
 
-// ===============================
-// 🔥 ПОДПИСКА (1 месяц доступа)
-// ===============================
+        capture: true,
+        description: `Покупка ${tokens} токенов`,
 
-const userRole = req.user.role;
+        // 🔥 ВОТ ЭТО ОБЯЗАТЕЛЬНО!
+        receipt: {
+          customer: {
+            email: userEmail
+          },
+          items: [
+            {
+              description: `Токены (${tokens})`,
+              quantity: "1.00",
+              amount: {
+                value: amount.toFixed(2),
+                currency: "RUB"
+              },
+              vat_code: 1
+            }
+          ]
+        }
 
-if (userRole !== "admin") {
-
-  const sub = await pool.query(
-    "SELECT id FROM subscriptions WHERE user_id = $1",
-    [userId]
-  );
-
-  if (sub.rows.length === 0) {
-
-    // создаём доступ на 1 месяц
-    await pool.query(
-      `INSERT INTO subscriptions (user_id, expires_at)
-       VALUES ($1, NOW() + INTERVAL '1 month')`,
-      [userId]
+      },
+      {
+        auth: {
+          username: process.env.YOOKASSA_SHOP_ID,
+          password: process.env.YOOKASSA_SECRET_KEY
+        },
+        headers: {
+          "Idempotence-Key": uuidv4()
+        }
+      }
     );
 
-  } else {
+    const confirmationUrl = yooResponse.data.confirmation.confirmation_url;
 
-    // ВАЖНО: НЕ продлеваем!
-    // просто обновляем доступ на месяц от текущего момента
-
+    // сохраняем id юкассы
     await pool.query(
-      `UPDATE subscriptions
-       SET expires_at = NOW() + INTERVAL '1 month'
-       WHERE user_id = $1`,
-      [userId]
+      `UPDATE payments
+       SET external_id = $1
+       WHERE id = $2`,
+      [yooResponse.data.id, paymentId]
     );
-  }
-}
 
     return res.json({
       ok: true,
-      confirmationUrl: yookassaResponse.data.confirmation.confirmation_url
+      confirmationUrl
     });
 
   } catch (e) {
-    console.error("CREATE PAYMENT ERROR:", e);
-    res.status(500).json({
+    console.error("CREATE PAYMENT ERROR:", e.response?.data || e);
+    return res.status(500).json({
       ok: false,
-      error: "server_error"
+      error: "payment_creation_failed"
     });
   }
 });
