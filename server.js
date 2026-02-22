@@ -39,7 +39,7 @@ pool.query("SELECT 1")
 
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: "1mb" }));
+app.use(express.json({ limit: "10mb" }));
 
 const PORT = process.env.PORT || 3000;
 
@@ -732,7 +732,22 @@ function rateLimitMiddleware(req, res, next) {
 // ==================
 app.post("/api/generate-image", authMiddleware, async (req, res) => {
   try {
-    const { prompt } = req.body;
+    const {
+  prompt,
+  model: modelName,
+  image,
+  images,
+  peopleImages,
+  objectImages,
+  mimeType,
+  width,
+  height,
+  safety,
+  mode,
+  quality,
+  aspectRatio,
+  imageSize
+} = req.body;
     let { requestId } = req.body;
     const { id, role } = req.user;
 
@@ -761,6 +776,15 @@ if (role !== "admin") {
       return res.status(400).json({ error: "prompt is required" });
     }
 
+    // ===============================
+// ✏ EDIT MODE VALIDATION
+// ===============================
+if (mode === "edit" && !image && !images) {
+  return res.status(400).json({
+    error: "Edit mode requires image or images input"
+  });
+}
+
     // если фронт не прислал requestId — создаём сами
     if (!requestId) {
       requestId = `${id}-${Date.now()}`;
@@ -785,7 +809,7 @@ if (role !== "admin") {
       throw e;
     }
 
-    // ======================================
+// ======================================
 // ⏱ RATE LIMIT (ПОСЛЕ anti-duplicate)
 // ======================================
 const now = Date.now();
@@ -844,23 +868,290 @@ if (role !== "admin") {
 
 }
 
-    // ======================================
-    // 🤖 ГЕНЕРАЦИЯ
-    // ======================================
-    const model = genAI.getGenerativeModel({
-      model: "gemini-2.5-flash-image",
+const controller = new AbortController();
+const timeout = setTimeout(() => controller.abort(), 30_000);
+
+// ===============================
+// 🎨 QUALITY MODES
+// ===============================
+
+let finalModel = modelName || "gemini-2.5-flash-image";
+let finalWidth = width || 1024;
+let finalHeight = height || 1024;
+let temperature = 0.9;
+let outputMimeType = "image/png";
+
+if (quality === "ultra") {
+
+  finalModel = "gemini-3-pro-image-preview";
+  temperature = 1.1;
+  imageSize = "4K";
+
+} else if (quality === "draft") {
+
+  finalWidth = 512;
+  finalHeight = 512;
+  temperature = 0.7;
+  outputMimeType = "image/jpeg";
+  finalModel = "gemini-2.5-flash-image";
+
+} else if (quality === "pro") {
+
+  finalWidth = 2048;
+  finalHeight = 2048;
+  temperature = 1.0;
+  finalModel = "gemini-3-pro-image-preview";
+  outputMimeType = "image/png";
+
+} else {
+
+  finalWidth = width || 1024;
+  finalHeight = height || 1024;
+  temperature = 0.9;
+  finalModel = modelName || "gemini-2.5-flash-image";
+
+}
+
+const isProModel = finalModel === "gemini-3-pro-image-preview";
+
+// ===============================
+// 🤖 TEXT OR IMAGE-TO-IMAGE
+// ===============================
+
+let parts = [];
+
+// ===============================
+// 🧑‍🤝‍🧑 PEOPLE / OBJECT SPLIT (PRO)
+// ===============================
+if (isProModel) {
+
+  const allRefs = [];
+
+  if (Array.isArray(peopleImages)) {
+    for (const img of peopleImages) {
+      if (!img?.data) continue;
+      allRefs.push({
+        inlineData: {
+          data: img.data,
+          mimeType: img.mimeType || "image/jpeg"
+        }
+      });
+    }
+  }
+
+  if (Array.isArray(objectImages)) {
+    for (const img of objectImages) {
+      if (!img?.data) continue;
+      allRefs.push({
+        inlineData: {
+          data: img.data,
+          mimeType: img.mimeType || "image/jpeg"
+        }
+      });
+    }
+  }
+
+  if (allRefs.length > 14) {
+    return res.status(400).json({
+      error: "Maximum 14 reference images allowed"
     });
+  }
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 30_000);
+  parts.push(...allRefs);
+}
 
-    const result = await model.generateContent(prompt, {
-      signal: controller.signal,
+// ===============================
+// 🔁 SINGLE IMAGE (Flash / fallback)
+// ===============================
+
+else if (image && typeof image === "string") {
+
+  parts.push({
+    inlineData: {
+      data: image,
+      mimeType: mimeType || "image/png",
+    },
+  });
+
+}
+
+// всегда добавляем текст последним
+parts.push({
+  text: `Respond in ru-RU language. ${prompt}`
+});
+
+// ======================================
+// 🤖 ГЕНЕРАЦИЯ
+// ======================================
+    const selectedModel = finalModel;
+
+const model = genAI.getGenerativeModel({
+  model: selectedModel,
+});
+
+if (!isProModel && imageSize) {
+  return res.status(400).json({
+    error: "imageSize supported only for Gemini 3 Pro model"
+  });
+}
+
+// ===============================
+// 💰 COST CONTROL
+// ===============================
+if (imageSize === "4K" && role !== "admin") {
+
+  const extraCost = 2; // уже 1 списали выше
+
+  const debit = await pool.query(
+    `UPDATE users
+     SET tokens = tokens - $1
+     WHERE id = $2 AND tokens >= $1
+     RETURNING tokens`,
+    [cost, id]
+  );
+
+  if (debit.rowCount === 0) {
+    return res.status(403).json({
+      error: "Not enough tokens for 4K generation"
     });
+  }
 
-    clearTimeout(timeout);
+}
 
-    const response = await result.response;
+// ===============================
+// 🖼 GENERATION CONFIG
+// ===============================
+
+// если Pro и imageSize не передали → ставим дефолт
+let finalImageSize = imageSize;
+
+if (isProModel && !imageSize) {
+  imageSize = "1K";
+}
+
+let generationConfig = {
+  temperature
+};
+
+// ===============================
+// 📄 RESPONSE MODES
+// ===============================
+if (mode === "text+image") {
+  generationConfig.responseModalities = ["TEXT", "IMAGE"];
+} else {
+  generationConfig.responseModalities = ["IMAGE"];
+}
+
+// Если используется Gemini 3 Pro
+if (isProModel && imageSize) {
+
+  // проверяем допустимые значения
+  const allowedSizes = ["1K", "2K", "4K"];
+
+  if (!allowedSizes.includes(imageSize)) {
+    return res.status(400).json({
+      error: "Invalid imageSize. Use 1K, 2K or 4K (uppercase K)"
+    });
+  }
+
+  generationConfig.imageGenerationConfig = {
+    aspectRatio: aspectRatio || "1:1",
+    imageSize: imageSize
+  };
+
+} else {
+
+  // для Flash или если imageSize не указан
+  generationConfig.imageGenerationConfig = {
+  width: finalWidth,
+  height: finalHeight,
+  mimeType: outputMimeType
+};
+
+if (aspectRatio) {
+  generationConfig.imageGenerationConfig.aspectRatio = aspectRatio;
+};
+
+}
+
+// ===============================
+// 🌍 GOOGLE SEARCH (PRO ONLY)
+// ===============================
+if (isProModel && mode === "realtime") {
+  generationConfig.tools = [
+    { googleSearch: {} }
+  ];
+}
+
+// ===============================
+// 🛡 SAFETY SETTINGS
+// ===============================
+
+let safetySettings;
+
+if (safety === "off") {
+
+  safetySettings = [
+    { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+    { category: "HARM_CATEGORY_SEXUAL_CONTENT", threshold: "BLOCK_NONE" },
+    { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
+    { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+    { category: "HARM_CATEGORY_SELF_HARM", threshold: "BLOCK_NONE" },
+  ];
+
+} else if (safety === "strict") {
+
+  safetySettings = [
+    { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_LOW_AND_ABOVE" },
+    { category: "HARM_CATEGORY_SEXUAL_CONTENT", threshold: "BLOCK_LOW_AND_ABOVE" },
+    { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_LOW_AND_ABOVE" },
+    { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_LOW_AND_ABOVE" },
+    { category: "HARM_CATEGORY_SELF_HARM", threshold: "BLOCK_LOW_AND_ABOVE" },
+  ];
+
+} else {
+
+  // balanced
+  safetySettings = [
+    { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
+    { category: "HARM_CATEGORY_SEXUAL_CONTENT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
+    { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
+    { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
+    { category: "HARM_CATEGORY_SELF_HARM", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
+  ];
+
+}
+
+const result = await model.generateContent(
+  {
+    contents: [
+      {
+        role: "user",
+        parts,
+      },
+    ],
+    generationConfig,
+    safetySettings
+  },
+  {
+    signal: controller.signal,
+  }
+);
+
+clearTimeout(timeout);
+const response = await result.response;
+
+// ===============================
+// 🧠 THINKING LOG (PRO)
+// ===============================
+if (isProModel) {
+  const thoughtParts = response?.candidates?.[0]?.content?.parts
+    ?.filter(p => p.thought);
+
+  if (thoughtParts?.length) {
+    console.log("🧠 Gemini thinking:", thoughtParts.length);
+  }
+}
 
     // ======================================
     // 💾 СОХРАНЯЕМ В ИСТОРИЮ
@@ -868,11 +1159,11 @@ if (role !== "admin") {
     let imageUrl = null;
 
     try {
-      const parts = response?.candidates?.[0]?.content?.parts || [];
+      const responseParts = response?.candidates?.[0]?.content?.parts || [];
 
       const imagePart =
-        parts.find(p => p.inlineData?.data) ||
-        parts.find(p => p.inline_data?.data);
+  responseParts.find(p => p.inlineData?.data) ||
+  responseParts.find(p => p.inline_data?.data);
 
       if (imagePart) {
 
@@ -924,6 +1215,34 @@ if (role !== "admin") {
       error: "generation failed",
       message: err?.message || "unknown error",
     });
+  }
+});
+
+// ===============================
+// 🚀 STREAM GENERATION
+// ===============================
+app.post("/api/generate-image-stream", authMiddleware, async (req, res) => {
+  try {
+
+    const model = genAI.getGenerativeModel({
+      model: "gemini-3-pro-image-preview",
+    });
+
+    const stream = await model.generateContentStream({
+      contents: req.body.prompt,
+    });
+
+    res.setHeader("Content-Type", "text/event-stream");
+
+    for await (const chunk of stream.stream) {
+      res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+    }
+
+    res.end();
+
+  } catch (err) {
+    console.error("STREAM ERROR:", err);
+    res.status(500).end();
   }
 });
 
