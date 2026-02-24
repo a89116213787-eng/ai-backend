@@ -1007,7 +1007,7 @@ if (imageSize === "4K" && role !== "admin") {
      SET tokens = tokens - $1
      WHERE id = $2 AND tokens >= $1
      RETURNING tokens`,
-    [cost, id]
+    [extraCost, id]
   );
 
   if (debit.rowCount === 0) {
