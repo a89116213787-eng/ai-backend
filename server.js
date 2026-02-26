@@ -987,42 +987,43 @@ parts.push({
 // ======================================
     const selectedModel = finalModel;
 
-const response = await ai.models.generateContent({
-  model: selectedModel,
-  contents: [
-    {
-      role: "user",
-      parts
+let response;
+let imageBase64 = null;
+let imageMime = "image/png";
+
+if (selectedModel.includes("image")) {
+
+  // 🖼 Правильный метод для image моделей
+  const imgResponse = await ai.models.generateImages({
+    model: selectedModel,
+    prompt: prompt,
+    config: {
+      number_of_images: 1,
+      aspect_ratio: aspectRatio || "1:1",
     }
-  ],
-  config: {
-    temperature,
-    responseModalities: mode === "text+image"
-      ? ["TEXT", "IMAGE"]
-      : ["IMAGE"],
+  });
 
-    imageGenerationConfig: isProModel
-      ? {
-          aspectRatio: aspectRatio || "1:1",
-          imageSize: imageSize || "1K"
-        }
-      : {
-          width: finalWidth,
-          height: finalHeight,
-          mimeType: outputMimeType
-        },
-
-    safetySettings: safety === "off"
-      ? [
-          { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
-          { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
-        ]
-      : [
-          { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
-          { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_MEDIUM_AND_ABOVE" }
-        ]
+  if (!imgResponse.generatedImages?.length) {
+    throw new Error("No image generated");
   }
-});
+
+  imageBase64 = imgResponse.generatedImages[0].image.imageBytes;
+  imageMime = "image/png";
+
+  response = imgResponse;
+
+} else {
+
+  // 🧠 Текстовые модели
+  response = await ai.models.generateContent({
+    model: selectedModel,
+    contents: prompt,
+    config: {
+      temperature
+    }
+  });
+
+}
 
 clearTimeout(timeout);
 
@@ -1043,51 +1044,34 @@ if (isProModel) {
     // ======================================
     let imageUrl = null;
 
-    try {
-      const responseParts = response?.candidates?.[0]?.content?.parts || [];
+    if (imageBase64) {
 
-      const imagePart =
-  responseParts.find(p => p.inlineData?.data) ||
-  responseParts.find(p => p.inline_data?.data);
+  imageUrl = `data:${imageMime};base64,${imageBase64}`;
 
-      if (imagePart) {
+  await pool.query(
+    `INSERT INTO generations (user_id, prompt, image_url)
+     VALUES ($1, $2, $3)`,
+    [id, prompt, imageUrl]
+  );
 
-        const base64 =
-          imagePart.inlineData?.data ||
-          imagePart.inline_data?.data;
+  console.log("🧠 generation saved for user", id);
 
-        const mime =
-          imagePart.inlineData?.mimeType ||
-          imagePart.inline_data?.mime_type ||
-          "image/png";
-
-        imageUrl = `data:${mime};base64,${base64}`;
-
-        await pool.query(
-          `INSERT INTO generations (user_id, prompt, image_url)
-           VALUES ($1, $2, $3)`,
-          [id, prompt, imageUrl]
-        );
-
-        console.log("🧠 generation saved for user", id);
-
-      } else {
-
-  console.log("⚠️ Gemini returned no image — generation not saved");
+  return res.json({
+    ok: true,
+    image: imageUrl
+  });
 
 }
 
-    } catch (e) {
-      console.error("SAVE GENERATION ERROR:", e);
-    }
+// если текстовая модель
+return res.json({
+  ok: true,
+  data: response
+});
 
     // ======================================
     // ОТВЕТ КЛИЕНТУ (ВСЕГДА!)
     // ======================================
-    res.json({
-      ok: true,
-      data: response,
-    });
 
   } catch (err) {
     console.error("Gemini error:", err?.message || err);
