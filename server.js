@@ -994,23 +994,34 @@ let imageMime = "image/png";
 if (selectedModel.includes("image")) {
 
   // 🖼 Правильный метод для image моделей
-  const imgResponse = await ai.models.generateImages({
-    model: selectedModel,
-    prompt: prompt,
-    config: {
-      number_of_images: 1,
-      aspect_ratio: aspectRatio || "1:1",
+  const response = await ai.models.generateContent({
+  model: selectedModel,
+  contents: [
+    {
+      role: "user",
+      parts: [
+        { text: prompt }
+      ]
     }
-  });
-
-  if (!imgResponse.generatedImages?.length) {
-    throw new Error("No image generated");
+  ],
+  config: {
+    responseModalities: ["IMAGE"],
+    temperature
   }
+});
 
-  imageBase64 = imgResponse.generatedImages[0].image.imageBytes;
-  imageMime = "image/png";
+const parts = response?.candidates?.[0]?.content?.parts || [];
 
-  response = imgResponse;
+const imagePart = parts.find(p => p.inlineData?.data);
+
+if (!imagePart) {
+  throw new Error("No image returned");
+}
+
+const imageBase64 = imagePart.inlineData.data;
+const imageMime = imagePart.inlineData.mimeType || "image/png";
+
+const imageUrl = `data:${imageMime};base64,${imageBase64}`;
 
 } else {
 
