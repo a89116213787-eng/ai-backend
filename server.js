@@ -1,4 +1,4 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { GoogleGenAI } from "@google/genai";
 import crypto from "crypto";
 import { Pool } from "pg";
 import bcrypt from "bcrypt";
@@ -55,7 +55,9 @@ if (!process.env.JWT_SECRET) {
   process.exit(1);
 }
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const ai = new GoogleGenAI({
+  apiKey: process.env.GEMINI_API_KEY
+});
 
 // ==================
 // JWT MIDDLEWARE
@@ -985,161 +987,44 @@ parts.push({
 // ======================================
     const selectedModel = finalModel;
 
-const model = genAI.getGenerativeModel({
+const response = await ai.models.generateContent({
   model: selectedModel,
+  contents: [
+    {
+      role: "user",
+      parts
+    }
+  ],
+  config: {
+    temperature,
+    responseModalities: mode === "text+image"
+      ? ["TEXT", "IMAGE"]
+      : ["IMAGE"],
+
+    imageGenerationConfig: isProModel
+      ? {
+          aspectRatio: aspectRatio || "1:1",
+          imageSize: imageSize || "1K"
+        }
+      : {
+          width: finalWidth,
+          height: finalHeight,
+          mimeType: outputMimeType
+        },
+
+    safetySettings: safety === "off"
+      ? [
+          { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+          { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
+        ]
+      : [
+          { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
+          { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_MEDIUM_AND_ABOVE" }
+        ]
+  }
 });
 
-if (!isProModel && imageSize) {
-  return res.status(400).json({
-    error: "imageSize supported only for Gemini 3 Pro model"
-  });
-}
-
-// ===============================
-// 💰 COST CONTROL
-// ===============================
-if (imageSize === "4K" && role !== "admin") {
-
-  const extraCost = 2; // уже 1 списали выше
-
-  const debit = await pool.query(
-    `UPDATE users
-     SET tokens = tokens - $1
-     WHERE id = $2 AND tokens >= $1
-     RETURNING tokens`,
-    [cost, id]
-  );
-
-  if (debit.rowCount === 0) {
-    return res.status(403).json({
-      error: "Not enough tokens for 4K generation"
-    });
-  }
-
-}
-
-// ===============================
-// 🖼 GENERATION CONFIG
-// ===============================
-
-// если Pro и imageSize не передали → ставим дефолт
-let finalImageSize = imageSize;
-
-if (isProModel && !imageSize) {
-  imageSize = "1K";
-}
-
-let generationConfig = {
-  temperature
-};
-
-// ===============================
-// 📄 RESPONSE MODES
-// ===============================
-if (mode === "text+image") {
-  generationConfig.responseModalities = ["TEXT", "IMAGE"];
-} else {
-  generationConfig.responseModalities = ["IMAGE"];
-}
-
-// Если используется Gemini 3 Pro
-if (isProModel && imageSize) {
-
-  // проверяем допустимые значения
-  const allowedSizes = ["1K", "2K", "4K"];
-
-  if (!allowedSizes.includes(imageSize)) {
-    return res.status(400).json({
-      error: "Invalid imageSize. Use 1K, 2K or 4K (uppercase K)"
-    });
-  }
-
-  generationConfig.imageGenerationConfig = {
-    aspectRatio: aspectRatio || "1:1",
-    imageSize: imageSize
-  };
-
-} else {
-
-  // для Flash или если imageSize не указан
-  generationConfig.imageGenerationConfig = {
-  width: finalWidth,
-  height: finalHeight,
-  mimeType: outputMimeType
-};
-
-if (aspectRatio) {
-  generationConfig.imageGenerationConfig.aspectRatio = aspectRatio;
-};
-
-}
-
-// ===============================
-// 🌍 GOOGLE SEARCH (PRO ONLY)
-// ===============================
-if (isProModel && mode === "realtime") {
-  generationConfig.tools = [
-    { googleSearch: {} }
-  ];
-}
-
-// ===============================
-// 🛡 SAFETY SETTINGS
-// ===============================
-
-let safetySettings;
-
-if (safety === "off") {
-
-  safetySettings = [
-    { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
-    { category: "HARM_CATEGORY_SEXUAL_CONTENT", threshold: "BLOCK_NONE" },
-    { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
-    { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
-    { category: "HARM_CATEGORY_SELF_HARM", threshold: "BLOCK_NONE" },
-  ];
-
-} else if (safety === "strict") {
-
-  safetySettings = [
-    { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_LOW_AND_ABOVE" },
-    { category: "HARM_CATEGORY_SEXUAL_CONTENT", threshold: "BLOCK_LOW_AND_ABOVE" },
-    { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_LOW_AND_ABOVE" },
-    { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_LOW_AND_ABOVE" },
-    { category: "HARM_CATEGORY_SELF_HARM", threshold: "BLOCK_LOW_AND_ABOVE" },
-  ];
-
-} else {
-
-  // balanced
-  safetySettings = [
-    { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
-    { category: "HARM_CATEGORY_SEXUAL_CONTENT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
-    { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
-    { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
-    { category: "HARM_CATEGORY_SELF_HARM", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
-  ];
-
-}
-
-const result = await model.generateContent(
-  {
-    contents: [
-      {
-        role: "user",
-        parts,
-      },
-    ],
-    generationConfig,
-    safetySettings
-  },
-  {
-    signal: controller.signal,
-  }
-);
-
 clearTimeout(timeout);
-const response = await result.response;
 
 // ===============================
 // 🧠 THINKING LOG (PRO)
@@ -1223,18 +1108,21 @@ if (isProModel) {
 // ===============================
 app.post("/api/generate-image-stream", authMiddleware, async (req, res) => {
   try {
-
-    const model = genAI.getGenerativeModel({
-      model: "gemini-3-pro-image-preview",
-    });
-
-    const stream = await model.generateContentStream({
-      contents: req.body.prompt,
-    });
-
     res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
 
-    for await (const chunk of stream.stream) {
+    const stream = await ai.models.generateContentStream({
+      model: "gemini-3-pro-image-preview",
+      contents: [
+        {
+          role: "user",
+          parts: [{ text: req.body.prompt }]
+        }
+      ]
+    });
+
+    for await (const chunk of stream) {
       res.write(`data: ${JSON.stringify(chunk)}\n\n`);
     }
 
