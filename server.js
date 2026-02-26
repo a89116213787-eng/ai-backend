@@ -39,7 +39,8 @@ pool.query("SELECT 1")
 
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: "10mb" }));
+app.use(express.json({ limit: "25mb" }));
+app.use(express.urlencoded({ limit: "25mb", extended: true }));
 
 const PORT = process.env.PORT || 3000;
 
@@ -870,7 +871,7 @@ if (role !== "admin") {
 
 }
 
-const controller = new AbortController();
+signal: controller.signal
 const timeout = setTimeout(() => controller.abort(), 30_000);
 
 // ===============================
@@ -979,29 +980,26 @@ else if (image && typeof image === "string") {
 
 // всегда добавляем текст последним
 parts.push({
-  text: `Respond in ru-RU language. ${prompt}`
+  text: `Generate a high quality detailed image. ${prompt}`
 });
 
 // ======================================
-// 🤖 ГЕНЕРАЦИЯ
+// 🤖 ГЕНЕРАЦИЯ (FINAL CLEAN VERSION)
 // ======================================
-    const selectedModel = finalModel;
 
 let response;
 let imageBase64 = null;
 let imageMime = "image/png";
 
-if (selectedModel.includes("image")) {
+// Для image моделей
+if (finalModel.includes("image")) {
 
-  // 🖼 Правильный метод для image моделей
-  const response = await ai.models.generateContent({
-  model: selectedModel,
+  response = await ai.models.generateContent({
+  model: finalModel,
   contents: [
     {
       role: "user",
-      parts: [
-        { text: prompt }
-      ]
+      parts
     }
   ],
   config: {
@@ -1010,24 +1008,25 @@ if (selectedModel.includes("image")) {
   }
 });
 
-const parts = response?.candidates?.[0]?.content?.parts || [];
+  const candidate = response?.candidates?.[0];
+  const contentParts = candidate?.content?.parts || [];
 
-const imagePart = parts.find(p => p.inlineData?.data);
+  const imagePart = contentParts.find(p => p.inlineData?.data);
 
-if (!imagePart) {
-  throw new Error("No image returned");
-}
+  if (!imagePart) {
+    console.error("⚠ Gemini returned no IMAGE modality");
+    console.error(JSON.stringify(response, null, 2));
+    throw new Error("No image returned from model");
+  }
 
-const imageBase64 = imagePart.inlineData.data;
-const imageMime = imagePart.inlineData.mimeType || "image/png";
-
-const imageUrl = `data:${imageMime};base64,${imageBase64}`;
+  imageBase64 = imagePart.inlineData.data;
+  imageMime = imagePart.inlineData.mimeType || "image/png";
 
 } else {
 
-  // 🧠 Текстовые модели
+  // Текстовая модель
   response = await ai.models.generateContent({
-    model: selectedModel,
+    model: finalModel,
     contents: prompt,
     config: {
       temperature
@@ -1051,13 +1050,12 @@ if (isProModel) {
 }
 
     // ======================================
-    // 💾 СОХРАНЯЕМ В ИСТОРИЮ
-    // ======================================
-    let imageUrl = null;
+// 💾 СОХРАНЯЕМ В ИСТОРИЮ
+// ======================================
 
-    if (imageBase64) {
+if (imageBase64) {
 
-  imageUrl = `data:${imageMime};base64,${imageBase64}`;
+  const imageUrl = `data:${imageMime};base64,${imageBase64}`;
 
   await pool.query(
     `INSERT INTO generations (user_id, prompt, image_url)
@@ -1065,16 +1063,13 @@ if (isProModel) {
     [id, prompt, imageUrl]
   );
 
-  console.log("🧠 generation saved for user", id);
-
   return res.json({
     ok: true,
     image: imageUrl
   });
-
 }
 
-// если текстовая модель
+// текстовый ответ
 return res.json({
   ok: true,
   data: response
