@@ -871,9 +871,6 @@ if (role !== "admin") {
 
 }
 
-signal: controller.signal
-const timeout = setTimeout(() => controller.abort(), 30_000);
-
 // ===============================
 // 🎨 QUALITY MODES
 // ===============================
@@ -1034,8 +1031,6 @@ if (finalModel.includes("image")) {
   });
 
 }
-
-clearTimeout(timeout);
 
 // ===============================
 // 🧠 THINKING LOG (PRO)
