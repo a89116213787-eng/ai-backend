@@ -780,6 +780,44 @@ if (role !== "admin") {
     }
 
 // ===============================
+// 🛡 IMAGE SIZE SAFETY LIMIT
+// ===============================
+
+const MAX_IMAGE_SIZE_MB = 5;
+const MAX_IMAGES = 4;
+
+function getBase64SizeMB(base64) {
+  if (!base64 || typeof base64 !== "string") return 0;
+  const clean = base64.replace(/^data:.*;base64,/, "");
+  return (clean.length * 3 / 4) / (1024 * 1024);
+}
+
+let allIncomingImages = [];
+
+// собираем все возможные входящие изображения
+if (image) allIncomingImages.push(image);
+if (Array.isArray(images)) allIncomingImages.push(...images);
+if (Array.isArray(peopleImages)) allIncomingImages.push(...peopleImages);
+if (Array.isArray(objectImages)) allIncomingImages.push(...objectImages);
+
+// ограничение по количеству
+if (allIncomingImages.length > MAX_IMAGES) {
+  return res.status(400).json({
+    error: `Maximum ${MAX_IMAGES} images allowed`
+  });
+}
+
+// ограничение по размеру
+for (const img of allIncomingImages) {
+  const sizeMB = getBase64SizeMB(img);
+  if (sizeMB > MAX_IMAGE_SIZE_MB) {
+    return res.status(400).json({
+      error: `Image too large. Max ${MAX_IMAGE_SIZE_MB}MB allowed`
+    });
+  }
+}
+
+// ===============================
 // ✏ EDIT MODE VALIDATION (PRO SUPPORT)
 // ===============================
 if (
