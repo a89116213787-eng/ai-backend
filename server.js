@@ -998,6 +998,7 @@ if (aspectRatio && typeof aspectRatio === "string") {
 // ===============================
 
 let parts = [];
+let orderedImages = [];
 
 // 🟣 PRO MODEL — structured identity
 if (finalModel === "gemini-3-pro-image-preview") {
@@ -1048,8 +1049,6 @@ if (finalModel === "gemini-3-pro-image-preview") {
 
 // 🔵 Flash или fallback режим
 else {
-
-  let orderedImages = [];
 
   if (Array.isArray(images) && images.length > 0) {
     orderedImages = images;
