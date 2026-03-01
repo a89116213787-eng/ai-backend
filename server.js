@@ -974,7 +974,7 @@ if (aspectRatio && typeof aspectRatio === "string") {
 
   if (w && h) {
 
-    const base = 1024;
+    const base = Math.max(finalWidth, finalHeight);
 
     let rawWidth, rawHeight;
 
@@ -1045,6 +1045,34 @@ if (finalModel === "gemini-3-pro-image-preview") {
     });
   }
 
+  // 🟣 FALLBACK — если нет people/object, но есть обычные images
+if (
+  (!peopleImages || peopleImages.length === 0) &&
+  (!objectImages || objectImages.length === 0)
+) {
+
+  let fallbackImages = [];
+
+  if (Array.isArray(images) && images.length > 0) {
+    fallbackImages = images;
+  } else if (image && typeof image === "string") {
+    fallbackImages = [image];
+  }
+
+  fallbackImages.forEach((img) => {
+    if (!img) return;
+
+    const base64 = img.replace(/^data:.*;base64,/, "");
+
+    parts.push({
+      inlineData: {
+        data: base64,
+        mimeType: "image/png"
+      }
+    });
+  });
+
+}
 }
 
 // 🔵 Flash или fallback режим
