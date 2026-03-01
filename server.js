@@ -1130,20 +1130,14 @@ if (mode === "edit") {
   finalPrompt = `
 You are performing controlled image editing.
 
-Rules:
-- Preserve facial identity if people images were provided.
-- Do not alter identity unless explicitly instructed.
-- Maintain realism and anatomical correctness.
+IMPORTANT:
+- Resize canvas to ${finalWidth}x${finalHeight}.
+- Change aspect ratio if necessary.
+- Expand or crop image naturally to match new canvas size.
+- Preserve identity if faces are provided.
 - Apply only requested modifications.
 
 User instruction:
-${prompt}
-`;
-
-} else {
-
-  finalPrompt = `
-Generate a high quality, highly detailed image.
 ${prompt}
 `;
 
