@@ -900,41 +900,16 @@ let finalHeight = 1024;
 let temperature = 0.9;
 let outputMimeType = "image/png";
 
-// 🔵 FLASH 2.5 — всегда максимум
+// 🔵 FLASH 2.5 — simpler sizing
 if (finalModel === "gemini-2.5-flash-image") {
 
-  finalWidth = 2048;
-  finalHeight = 2048;
   temperature = 0.9;
   outputMimeType = "image/png";
 
-}
+  // базовый размер меньше для стабильности
+  finalWidth = 1024;
+  finalHeight = 1024;
 
-// 🟣 GEMINI 3 PRO
-if (finalModel === "gemini-3-pro-image-preview") {
-
-  temperature = 1.0;
-  outputMimeType = "image/png";
-
-  if (imageSize === "1K") {
-    finalWidth = 1024;
-    finalHeight = 1024;
-  }
-
-  else if (imageSize === "2K") {
-    finalWidth = 2048;
-    finalHeight = 2048;
-  }
-
-  else if (imageSize === "4K") {
-    finalWidth = 4096;
-    finalHeight = 4096;
-  }
-
-  else {
-    finalWidth = 2048;
-    finalHeight = 2048;
-  }
 }
 
 const isProModel = finalModel === "gemini-3-pro-image-preview";
@@ -949,7 +924,7 @@ if (aspectRatio && typeof aspectRatio === "string") {
 
   if (w && h) {
 
-    const base = Math.max(finalWidth, finalHeight);
+    const base = 1024;
 
     let rawWidth, rawHeight;
 
@@ -1106,7 +1081,6 @@ if (mode === "edit") {
 You are performing controlled image editing.
 
 IMPORTANT:
-- Resize canvas to ${finalWidth}x${finalHeight}.
 - Change aspect ratio if necessary.
 - Expand or crop image naturally to match new canvas size.
 - Preserve identity if faces are provided.
@@ -1120,7 +1094,6 @@ ${prompt}
 
   finalPrompt = `
 Generate a high quality, highly detailed image.
-Resize canvas to ${finalWidth}x${finalHeight}.
 ${prompt}
 `;
 
@@ -1141,7 +1114,29 @@ let imageMime = "image/png";
 // Для image моделей
 if (finalModel.includes("image")) {
 
-  response = await ai.models.generateContent({
+  // ===============================
+// 🖼 OFFICIAL IMAGE CONFIG (PRO ONLY)
+// ===============================
+
+let imageConfigBlock = {};
+
+if (finalModel === "gemini-3-pro-image-preview") {
+
+  imageConfigBlock = {
+    aspectRatio: aspectRatio || "1:1",
+    imageSize: imageSize || "1K"
+  };
+
+} else {
+
+  // Flash остаётся через aspectRatio
+  imageConfigBlock = {
+    aspectRatio: aspectRatio || "1:1"
+  };
+
+}
+
+response = await ai.models.generateContent({
   model: finalModel,
   contents: [
     {
@@ -1150,13 +1145,10 @@ if (finalModel.includes("image")) {
     }
   ],
   config: {
-  responseModalities: ["IMAGE"],
-  temperature,
-  imageConfig: {
-    width: finalWidth,
-    height: finalHeight
+    responseModalities: ["IMAGE"],
+    temperature,
+    imageConfig: imageConfigBlock
   }
-}
 });
 
   const candidate = response?.candidates?.[0];
@@ -1165,10 +1157,14 @@ if (finalModel.includes("image")) {
   const imagePart = contentParts.find(p => p.inlineData?.data);
 
   if (!imagePart) {
-    console.error("⚠ Gemini returned no IMAGE modality");
-    console.error(JSON.stringify(response, null, 2));
-    throw new Error("No image returned from model");
-  }
+  console.error("⚠ Gemini returned no IMAGE modality");
+  console.error(JSON.stringify(response, null, 2));
+
+  return res.status(502).json({
+    error: "model_no_image",
+    message: "Model returned no image. Please retry."
+  });
+}
 
   imageBase64 = imagePart.inlineData.data;
   imageMime = imagePart.inlineData.mimeType || "image/png";
