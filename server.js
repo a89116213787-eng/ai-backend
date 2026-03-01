@@ -751,7 +751,6 @@ app.post("/api/generate-image", authMiddleware, async (req, res) => {
   aspectRatio,
   imageSize
 } = req.body;
-    let { requestId } = req.body;
     const { id, role } = req.user;
 
 // ===============================
@@ -831,30 +830,6 @@ if (
     error: "Edit mode requires image input"
   });
 }
-
-    // если фронт не прислал requestId — создаём сами
-    if (!requestId) {
-      requestId = `${id}-${Date.now()}`;
-    }
-
-    // ======================================
-    // 🔁 ЗАЩИТА ОТ ДВОЙНЫХ ЗАПРОСОВ
-    // ======================================
-    try {
-      await pool.query(
-        "INSERT INTO request_logs (request_id, user_id) VALUES ($1, $2)",
-        [requestId, id]
-      );
-    } catch (e) {
-      if (e.code === "23505") {
-        return res.json({
-          ok: true,
-          skipped: true,
-          message: "request already processed",
-        });
-      }
-      throw e;
-    }
 
 // ======================================
 // ⏱ RATE LIMIT (ПОСЛЕ anti-duplicate)
@@ -1138,6 +1113,14 @@ IMPORTANT:
 - Apply only requested modifications.
 
 User instruction:
+${prompt}
+`;
+
+} else {
+
+  finalPrompt = `
+Generate a high quality, highly detailed image.
+Resize canvas to ${finalWidth}x${finalHeight}.
 ${prompt}
 `;
 
