@@ -915,69 +915,101 @@ if (quality === "ultra") {
 const isProModel = finalModel === "gemini-3-pro-image-preview";
 
 // ===============================
-// 🤖 TEXT OR IMAGE-TO-IMAGE
+// 📐 ASPECT RATIO SUPPORT (64 aligned)
+// ===============================
+
+if (aspectRatio && typeof aspectRatio === "string") {
+
+  const [w, h] = aspectRatio.split(":").map(Number);
+
+  if (w && h) {
+
+    const base = 1024;
+
+    let rawWidth, rawHeight;
+
+    if (w >= h) {
+      rawWidth = base;
+      rawHeight = base * (h / w);
+    } else {
+      rawHeight = base;
+      rawWidth = base * (w / h);
+    }
+
+    // делаем кратным 64
+    finalWidth = Math.round(rawWidth / 64) * 64;
+    finalHeight = Math.round(rawHeight / 64) * 64;
+
+  }
+}
+
+// ===============================
+// 🖼 IMAGE REFERENCES (ORDERED)
 // ===============================
 
 let parts = [];
 
-// ===============================
-// 🧑‍🤝‍🧑 PEOPLE / OBJECT SPLIT (PRO)
-// ===============================
-if (isProModel) {
+let orderedImages = [];
 
-  const allRefs = [];
-
-  if (Array.isArray(peopleImages)) {
-    for (const img of peopleImages) {
-      if (!img?.data) continue;
-      allRefs.push({
-        inlineData: {
-          data: img.data,
-          mimeType: img.mimeType || "image/jpeg"
-        }
-      });
-    }
-  }
-
-  if (Array.isArray(objectImages)) {
-    for (const img of objectImages) {
-      if (!img?.data) continue;
-      allRefs.push({
-        inlineData: {
-          data: img.data,
-          mimeType: img.mimeType || "image/jpeg"
-        }
-      });
-    }
-  }
-
-  if (allRefs.length > 14) {
-    return res.status(400).json({
-      error: "Maximum 14 reference images allowed"
-    });
-  }
-
-  parts.push(...allRefs);
+// 1️⃣ если пришёл массив images (из подключённых PromptCard)
+if (Array.isArray(images) && images.length > 0) {
+  orderedImages = images;
 }
 
-// ===============================
-// 🔁 SINGLE IMAGE (Flash / fallback)
-// ===============================
-
+// 2️⃣ если пришла одиночная картинка
 else if (image && typeof image === "string") {
+  orderedImages = [image];
+}
+
+// ограничение Gemini
+if (orderedImages.length > 14) {
+  return res.status(400).json({
+    error: "Maximum 14 reference images allowed"
+  });
+}
+
+// добавляем изображения В НАЧАЛО
+orderedImages.forEach((img, index) => {
+
+  if (!img) return;
+
+  // если img строка base64
+  const base64 = typeof img === "string"
+    ? img.replace(/^data:.*;base64,/, "")
+    : img.data;
 
   parts.push({
     inlineData: {
-      data: image,
-      mimeType: mimeType || "image/png",
-    },
+      data: base64,
+      mimeType: img?.mimeType || "image/png"
+    }
   });
 
+});
+
+// ===============================
+// ✏ TEXT PROMPT (ПОСЛЕ ИЗОБРАЖЕНИЙ)
+// ===============================
+
+let numberedInstruction = "";
+
+if (orderedImages.length > 0) {
+  numberedInstruction =
+    `You are editing provided images.\n` +
+    `Image numbering follows order:\n` +
+    orderedImages
+      .map((_, i) => `Image ${i + 1}`)
+      .join("\n") +
+    `\n\n`;
 }
 
-// всегда добавляем текст последним
+const finalPrompt =
+  orderedImages.length > 0
+    ? `You are editing the provided images.\n${prompt}`
+    : `Generate a high quality detailed image.\n${prompt}`;
+
 parts.push({
-  text: `Generate a high quality detailed image. ${prompt}`
+  text: finalPrompt
 });
 
 // ======================================
@@ -1000,9 +1032,13 @@ if (finalModel.includes("image")) {
     }
   ],
   config: {
-    responseModalities: ["IMAGE"],
-    temperature
+  responseModalities: ["IMAGE"],
+  temperature,
+  imageConfig: {
+    width: finalWidth,
+    height: finalHeight
   }
+}
 });
 
   const candidate = response?.candidates?.[0];
