@@ -876,40 +876,46 @@ if (role !== "admin") {
 // ===============================
 
 let finalModel = modelName || "gemini-2.5-flash-image";
-let finalWidth = width || 1024;
-let finalHeight = height || 1024;
+let finalWidth = 1024;
+let finalHeight = 1024;
 let temperature = 0.9;
 let outputMimeType = "image/png";
 
-if (quality === "ultra") {
-
-  finalModel = "gemini-3-pro-image-preview";
-  temperature = 1.1;
-  imageSize = "4K";
-
-} else if (quality === "draft") {
-
-  finalWidth = 512;
-  finalHeight = 512;
-  temperature = 0.7;
-  outputMimeType = "image/jpeg";
-  finalModel = "gemini-2.5-flash-image";
-
-} else if (quality === "pro") {
+// 🔵 FLASH 2.5 — всегда максимум
+if (finalModel === "gemini-2.5-flash-image") {
 
   finalWidth = 2048;
   finalHeight = 2048;
-  temperature = 1.0;
-  finalModel = "gemini-3-pro-image-preview";
+  temperature = 0.9;
   outputMimeType = "image/png";
 
-} else {
+}
 
-  finalWidth = width || 1024;
-  finalHeight = height || 1024;
-  temperature = 0.9;
-  finalModel = modelName || "gemini-2.5-flash-image";
+// 🟣 GEMINI 3 PRO
+if (finalModel === "gemini-3-pro-image-preview") {
 
+  temperature = 1.0;
+  outputMimeType = "image/png";
+
+  if (imageSize === "1K") {
+    finalWidth = 1024;
+    finalHeight = 1024;
+  }
+
+  else if (imageSize === "2K") {
+    finalWidth = 2048;
+    finalHeight = 2048;
+  }
+
+  else if (imageSize === "4K") {
+    finalWidth = 4096;
+    finalHeight = 4096;
+  }
+
+  else {
+    finalWidth = 2048;
+    finalHeight = 2048;
+  }
 }
 
 const isProModel = finalModel === "gemini-3-pro-image-preview";
