@@ -779,12 +779,18 @@ if (role !== "admin") {
       return res.status(400).json({ error: "prompt is required" });
     }
 
-    // ===============================
-// ✏ EDIT MODE VALIDATION
 // ===============================
-if (mode === "edit" && !image && !images) {
+// ✏ EDIT MODE VALIDATION (PRO SUPPORT)
+// ===============================
+if (
+  mode === "edit" &&
+  !image &&
+  !images &&
+  !peopleImages &&
+  !objectImages
+) {
   return res.status(400).json({
-    error: "Edit mode requires image or images input"
+    error: "Edit mode requires image input"
   });
 }
 
@@ -950,49 +956,92 @@ if (aspectRatio && typeof aspectRatio === "string") {
 }
 
 // ===============================
-// 🖼 IMAGE REFERENCES (ORDERED)
+// 🖼 IMAGE REFERENCES (PRO IDENTITY SUPPORT)
 // ===============================
 
 let parts = [];
 
-let orderedImages = [];
+// 🟣 PRO MODEL — structured identity
+if (finalModel === "gemini-3-pro-image-preview") {
 
-// 1️⃣ если пришёл массив images (из подключённых PromptCard)
-if (Array.isArray(images) && images.length > 0) {
-  orderedImages = images;
+  // 👤 PEOPLE IMAGES (лица сохраняем)
+  if (Array.isArray(peopleImages) && peopleImages.length > 0) {
+
+    peopleImages.forEach((img) => {
+      if (!img) return;
+
+      const base64 = img.replace(/^data:.*;base64,/, "");
+
+      parts.push({
+        inlineData: {
+          data: base64,
+          mimeType: "image/png"
+        }
+      });
+    });
+
+    parts.push({
+      text: "Preserve identity, facial structure, eyes, nose, mouth, proportions and skin tone of provided people images."
+    });
+  }
+
+  // 🏞 OBJECT IMAGES (фон / одежда)
+  if (Array.isArray(objectImages) && objectImages.length > 0) {
+
+    objectImages.forEach((img) => {
+      if (!img) return;
+
+      const base64 = img.replace(/^data:.*;base64,/, "");
+
+      parts.push({
+        inlineData: {
+          data: base64,
+          mimeType: "image/png"
+        }
+      });
+    });
+
+    parts.push({
+      text: "Use object images as editable environment or clothing reference."
+    });
+  }
+
 }
 
-// 2️⃣ если пришла одиночная картинка
-else if (image && typeof image === "string") {
-  orderedImages = [image];
-}
+// 🔵 Flash или fallback режим
+else {
 
-// ограничение Gemini
-if (orderedImages.length > 14) {
-  return res.status(400).json({
-    error: "Maximum 14 reference images allowed"
+  let orderedImages = [];
+
+  if (Array.isArray(images) && images.length > 0) {
+    orderedImages = images;
+  }
+  else if (image && typeof image === "string") {
+    orderedImages = [image];
+  }
+
+  if (orderedImages.length > 14) {
+    return res.status(400).json({
+      error: "Maximum 14 reference images allowed"
+    });
+  }
+
+  orderedImages.forEach((img) => {
+
+    if (!img) return;
+
+    const base64 = img.replace(/^data:.*;base64,/, "");
+
+    parts.push({
+      inlineData: {
+        data: base64,
+        mimeType: "image/png"
+      }
+    });
+
   });
+
 }
-
-// добавляем изображения В НАЧАЛО
-orderedImages.forEach((img, index) => {
-
-  if (!img) return;
-
-  // если img строка base64
-  const base64 = typeof img === "string"
-    ? img.replace(/^data:.*;base64,/, "")
-    : img.data;
-
-  parts.push({
-    inlineData: {
-      data: base64,
-      mimeType: img?.mimeType || "image/png"
-    }
-  });
-
-});
-
 // ===============================
 // ✏ TEXT PROMPT (ПОСЛЕ ИЗОБРАЖЕНИЙ)
 // ===============================
@@ -1009,10 +1058,31 @@ if (orderedImages.length > 0) {
     `\n\n`;
 }
 
-const finalPrompt =
-  orderedImages.length > 0
-    ? `You are editing the provided images.\n${prompt}`
-    : `Generate a high quality detailed image.\n${prompt}`;
+let finalPrompt = "";
+
+if (mode === "edit") {
+
+  finalPrompt = `
+You are performing controlled image editing.
+
+Rules:
+- Preserve facial identity if people images were provided.
+- Do not alter identity unless explicitly instructed.
+- Maintain realism and anatomical correctness.
+- Apply only requested modifications.
+
+User instruction:
+${prompt}
+`;
+
+} else {
+
+  finalPrompt = `
+Generate a high quality, highly detailed image.
+${prompt}
+`;
+
+}
 
 parts.push({
   text: finalPrompt
