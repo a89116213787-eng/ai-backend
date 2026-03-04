@@ -42,6 +42,12 @@ app.use(cors());
 app.use(express.json({ limit: "25mb" }));
 app.use(express.urlencoded({ limit: "25mb", extended: true }));
 
+// увеличиваем timeout для долгих генераций (4K / PRO)
+app.use((req, res, next) => {
+  res.setTimeout(120000); // 120 секунд
+  next();
+});
+
 const PORT = process.env.PORT || 3000;
 
 // --- Проверка наличия ключа ---
@@ -972,7 +978,33 @@ if (finalModel === "gemini-3-pro-image-preview") {
     parts.push({
       text: "Preserve identity, facial structure, eyes, nose, mouth, proportions and skin tone of provided people images."
     });
-  }
+
+ // ===============================
+ // 🔒 CHARACTER CONSISTENCY LOCK
+ // ===============================
+
+  parts.push({
+    text: `
+CRITICAL IDENTITY LOCK:
+
+The provided people images define a specific person.
+
+You must preserve:
+- face structure
+- identity
+- eyes
+- nose
+- lips
+- skin tone
+- proportions
+
+The person must remain the SAME across all generated scenes.
+
+Do not invent a new person.
+`
+  });
+
+}
 
   // 🏞 OBJECT IMAGES (фон / одежда)
   if (Array.isArray(objectImages) && objectImages.length > 0) {
@@ -1088,14 +1120,42 @@ IMPORTANT:
 
 User instruction:
 ${prompt}
+
+Enhance facial realism, skin texture, natural eyes, micro skin detail and photographic lighting.
 `;
 
 } else {
 
   finalPrompt = `
-Generate a high quality, highly detailed image.
+Generate an ultra realistic professional photograph.
+
+Use natural lighting, cinematic composition, realistic shadows and depth.
+
+Camera simulation:
+full-frame camera, 50mm lens, f/1.8 aperture, HDR, global illumination.
+
 ${prompt}
 `;
+
+}
+
+// ===============================
+// 🧠 MULTI IMAGE COMPOSITION HINT
+// ===============================
+
+if (peopleImages?.length && objectImages?.length) {
+
+  parts.push({
+    text: `
+You are composing a scene using multiple visual references.
+
+Rules:
+- People images define the identity and must remain unchanged.
+- Object images define environment, clothing or items.
+- Combine them naturally into one coherent scene.
+- Maintain realism, lighting consistency and proportions.
+`
+  });
 
 }
 
@@ -1148,7 +1208,8 @@ response = await ai.models.generateContent({
     responseModalities: ["IMAGE"],
     temperature,
     imageConfig: imageConfigBlock
-  }
+  },
+  timeout: 120000 // увеличенный timeout для PRO/4K
 });
 
   const candidate = response?.candidates?.[0];
