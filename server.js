@@ -9,6 +9,9 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import { sendMail } from "./src/services/mailClient.js";
+import { uploadToR2 } from "./utils/uploadToR2.js";
+import sharp from "sharp";
+import { S3Client, GetObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
 
 dotenv.config();
 
@@ -525,6 +528,44 @@ app.get("/api/user/generations", authMiddleware, async (req, res) => {
       ok: false,
       error: "failed to load generations",
     });
+  }
+});
+
+// ===============================
+// ❤️ LIKE GENERATION
+// ===============================
+app.post("/api/generation/like", authMiddleware, async (req, res) => {
+  try {
+
+    const { id } = req.body;
+
+    if (!id) {
+      return res.status(400).json({
+        ok: false,
+        error: "generation id required"
+      });
+    }
+
+    await pool.query(
+      `
+      UPDATE generations
+      SET liked = true
+      WHERE id = $1 AND user_id = $2
+      `,
+      [id, req.user.id]
+    );
+
+    res.json({ ok: true });
+
+  } catch (e) {
+
+    console.error("LIKE ERROR:", e);
+
+    res.status(500).json({
+      ok: false,
+      error: "like failed"
+    });
+
   }
 });
 
@@ -1261,17 +1302,25 @@ if (isProModel) {
 
 if (imageBase64) {
 
-  const imageUrl = `data:${imageMime};base64,${imageBase64}`;
+  const buffer = Buffer.from(imageBase64, "base64");
 
-  await pool.query(
-    `INSERT INTO generations (user_id, prompt, image_url)
-     VALUES ($1, $2, $3)`,
-    [id, prompt, imageUrl]
-  );
+  const webpBuffer = await sharp(buffer)
+    .webp({ quality: 85 })
+    .toBuffer();
+
+  const imageUrl = await uploadToR2(webpBuffer);
+
+  const result = await pool.query(
+  `INSERT INTO generations (user_id, prompt, image_url)
+   VALUES ($1, $2, $3)
+   RETURNING id`,
+  [id, prompt, imageUrl]
+);
 
   return res.json({
     ok: true,
-    image: imageUrl
+    image: imageUrl,
+    id: result.rows[0].id
   });
 }
 
@@ -1329,6 +1378,115 @@ app.post("/api/generate-image-stream", authMiddleware, async (req, res) => {
     res.status(500).end();
   }
 });
+
+app.get("/api/download/:id", authMiddleware, async (req, res) => {
+  try {
+
+    const { id } = req.params;
+
+    const result = await pool.query(
+      `SELECT image_url FROM generations WHERE id = $1`,
+      [id]
+    );
+
+    if (!result.rows.length) {
+      return res.status(404).json({ error: "image not found" });
+    }
+
+    const imageUrl = result.rows[0].image_url;
+
+    const key = imageUrl.split(".r2.dev/")[1];
+
+    const s3 = new S3Client({
+      region: "auto",
+      endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+      credentials: {
+        accessKeyId: process.env.R2_ACCESS_KEY,
+        secretAccessKey: process.env.R2_SECRET_KEY,
+      },
+    });
+
+    const object = await s3.send(
+      new GetObjectCommand({
+        Bucket: process.env.R2_BUCKET,
+        Key: key
+      })
+    );
+
+    const chunks = [];
+    for await (const chunk of object.Body) {
+      chunks.push(chunk);
+    }
+
+    const buffer = Buffer.concat(chunks);
+
+    const png = await sharp(buffer)
+      .png()
+      .toBuffer();
+
+    res.setHeader("Content-Type", "image/png");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="dizain.png"`
+    );
+
+    res.send(png);
+
+  } catch (e) {
+    console.error("DOWNLOAD ERROR", e);
+    res.status(500).json({ error: "download failed" });
+  }
+});
+
+// ======================================
+// AUTO CLEANUP OLD GENERATIONS (30 days)
+// ======================================
+
+async function cleanupOldGenerations() {
+  try {
+
+    const result = await pool.query(`
+      DELETE FROM generations
+      WHERE liked = false
+      AND created_at < NOW() - interval '30 days'
+      RETURNING image_url
+    `);
+
+    if (!result.rows.length) {
+      console.log("🧹 cleanup: nothing to delete");
+      return;
+    }
+
+    const s3 = new S3Client({
+      region: "auto",
+      endpoint: process.env.R2_ENDPOINT,
+      credentials: {
+        accessKeyId: process.env.R2_ACCESS_KEY,
+        secretAccessKey: process.env.R2_SECRET_KEY,
+      },
+    });
+
+    for (const row of result.rows) {
+
+      const key = row.image_url.split(".r2.dev/")[1];
+
+      await s3.send(
+        new DeleteObjectCommand({
+          Bucket: process.env.R2_BUCKET,
+          Key: key
+        })
+      );
+
+    }
+
+    console.log("🧹 deleted images:", result.rows.length);
+
+  } catch (err) {
+    console.error("CLEANUP ERROR:", err);
+  }
+}
+
+setInterval(cleanupOldGenerations, 24 * 60 * 60 * 1000);
 
 // ==================
 // START SERVER
