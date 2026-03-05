@@ -502,6 +502,7 @@ app.get("/api/user/me", authMiddleware, async (req, res) => {
 // ======================================================
 // WORKSPACE SAVE
 // ======================================================
+
 app.post("/api/workspace/save", authMiddleware, async (req, res) => {
   try {
 
@@ -523,8 +524,11 @@ app.post("/api/workspace/save", authMiddleware, async (req, res) => {
     res.json({ ok: true });
 
   } catch (e) {
+
     console.error("WORKSPACE SAVE ERROR:", e);
+
     res.status(500).json({ ok: false });
+
   }
 });
 
