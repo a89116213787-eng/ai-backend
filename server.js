@@ -500,6 +500,59 @@ app.get("/api/user/me", authMiddleware, async (req, res) => {
 });
 
 // ======================================================
+// WORKSPACE SAVE
+// ======================================================
+app.post("/api/workspace/save", authMiddleware, async (req, res) => {
+  try {
+
+    const userId = req.user.id;
+    const { data } = req.body;
+
+    await pool.query(
+      `
+      INSERT INTO workspaces (user_id, data)
+      VALUES ($1, $2)
+      ON CONFLICT (user_id)
+      DO UPDATE SET
+        data = EXCLUDED.data,
+        updated_at = NOW()
+      `,
+      [userId, data]
+    );
+
+    res.json({ ok: true });
+
+  } catch (e) {
+    console.error("WORKSPACE SAVE ERROR:", e);
+    res.status(500).json({ ok: false });
+  }
+});
+
+// ======================================================
+// WORKSPACE LOAD
+// ======================================================
+app.get("/api/workspace/load", authMiddleware, async (req, res) => {
+  try {
+
+    const userId = req.user.id;
+
+    const result = await pool.query(
+      `SELECT data FROM workspaces WHERE user_id = $1`,
+      [userId]
+    );
+
+    res.json({
+      ok: true,
+      data: result.rows[0]?.data || null
+    });
+
+  } catch (e) {
+    console.error("WORKSPACE LOAD ERROR:", e);
+    res.status(500).json({ ok: false });
+  }
+});
+
+// ======================================================
 // 🖼 USER GENERATIONS HISTORY
 // ======================================================
 app.get("/api/user/generations", authMiddleware, async (req, res) => {
