@@ -500,6 +500,52 @@ app.get("/api/user/me", authMiddleware, async (req, res) => {
 });
 
 // ======================================================
+// IMAGE UPLOAD (PROMPT CARD)
+// ======================================================
+
+app.post("/api/upload-image", authMiddleware, async (req, res) => {
+  try {
+
+    const { image } = req.body;
+
+    if (!image) {
+      return res.status(400).json({
+        ok: false,
+        error: "image required"
+      });
+    }
+
+    // убираем data:image/...;base64
+    const base64 = image.replace(/^data:.*;base64,/, "");
+
+    const buffer = Buffer.from(base64, "base64");
+
+    // 🔥 конвертируем в WEBP
+    const webpBuffer = await sharp(buffer)
+      .webp({ quality: 85 })
+      .toBuffer();
+
+    // 🔥 загружаем в R2
+    const imageUrl = await uploadToR2(webpBuffer);
+
+    return res.json({
+      ok: true,
+      url: imageUrl
+    });
+
+  } catch (e) {
+
+    console.error("UPLOAD IMAGE ERROR:", e);
+
+    res.status(500).json({
+      ok: false,
+      error: "upload failed"
+    });
+
+  }
+});
+
+// ======================================================
 // WORKSPACE SAVE
 // ======================================================
 
