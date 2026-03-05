@@ -41,4 +41,4 @@ router.post("/delete-image", async (req, res) => {
 
 });
 
-export default router;ы
+export default router;
