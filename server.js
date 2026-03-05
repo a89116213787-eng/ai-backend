@@ -12,6 +12,7 @@ import { sendMail } from "./src/services/mailClient.js";
 import { uploadToR2 } from "./utils/uploadToR2.js";
 import sharp from "sharp";
 import { S3Client, GetObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
+import deleteImageRoute from "./delete-image.js";
 
 dotenv.config();
 
@@ -92,6 +93,7 @@ function authMiddleware(req, res, next) {
 
 import paymentsRouter from "./payments.js";
 app.use("/api/payments", paymentsRouter(pool, authMiddleware));
+app.use("/api", deleteImageRoute);
 
 // ===============================
 // VERIFY SIGNATURE (anti-abuse)
