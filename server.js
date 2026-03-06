@@ -1484,9 +1484,9 @@ return res.json({
 
   console.error("Gemini error:", err?.message || err);
 
-  // ===============================
-  // 🔄 TOKEN REFUND
-  // ===============================
+    // ===============================
+    // 🔄 TOKEN REFUND
+    // ===============================
   if (spentCost > 0 && req.user?.role !== "admin") {
 
     try {
@@ -1520,7 +1520,7 @@ return res.json({
     error: "generation failed",
     message: err?.message || "unknown error",
   });
-  
+
  }
 });
 
