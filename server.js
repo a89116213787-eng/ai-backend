@@ -14,6 +14,27 @@ import sharp from "sharp";
 import { S3Client, GetObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
 import deleteImageRoute from "./delete-image.js";
 
+async function normalizeImageToBase64(img) {
+
+  if (!img) return null;
+
+  // если уже base64
+  if (img.startsWith("data:")) {
+    return img.replace(/^data:.*;base64,/, "");
+  }
+
+  // если URL (R2)
+  if (img.startsWith("http")) {
+
+    const response = await fetch(img);
+    const buffer = await response.arrayBuffer();
+
+    return Buffer.from(buffer).toString("base64");
+  }
+
+  return null;
+}
+
 dotenv.config();
 
 // ===============================
@@ -1110,21 +1131,8 @@ if (finalModel === "gemini-3-pro-image-preview") {
 
     for (const img of peopleImages) {
 
-  if (!img) continue;
-
-  let base64;
-
-  if (img.startsWith("http")) {
-
-    const response = await fetch(img);
-    const buffer = await response.arrayBuffer();
-    base64 = Buffer.from(buffer).toString("base64");
-
-  } else {
-
-    base64 = img.replace(/^data:.*;base64,/, "");
-
-  }
+  const base64 = await normalizeImageToBase64(img);
+  if (!base64) continue;
 
   parts.push({
     inlineData: {
@@ -1171,21 +1179,8 @@ Do not invent a new person.
 
     for (const img of objectImages) {
 
-  if (!img) continue;
-
-  let base64;
-
-  if (img.startsWith("http")) {
-
-    const response = await fetch(img);
-    const buffer = await response.arrayBuffer();
-    base64 = Buffer.from(buffer).toString("base64");
-
-  } else {
-
-    base64 = img.replace(/^data:.*;base64,/, "");
-
-  }
+  const base64 = await normalizeImageToBase64(img);
+  if (!base64) continue;
 
   parts.push({
     inlineData: {
@@ -1217,21 +1212,8 @@ if (
 
   for (const img of fallbackImages) {
 
-  if (!img) continue;
-
-  let base64;
-
-  if (img.startsWith("http")) {
-
-    const response = await fetch(img);
-    const buffer = await response.arrayBuffer();
-    base64 = Buffer.from(buffer).toString("base64");
-
-  } else {
-
-    base64 = img.replace(/^data:.*;base64,/, "");
-
-  }
+  const base64 = await normalizeImageToBase64(img);
+  if (!base64) continue;
 
   parts.push({
     inlineData: {
@@ -1261,20 +1243,19 @@ else {
     });
   }
 
-  orderedImages.forEach((img) => {
+  for (const img of orderedImages) {
 
-    if (!img) return;
+  const base64 = await normalizeImageToBase64(img);
+  if (!base64) continue;
 
-    const base64 = img.replace(/^data:.*;base64,/, "");
-
-    parts.push({
-      inlineData: {
-        data: base64,
-        mimeType: "image/png"
-      }
-    });
-
+  parts.push({
+    inlineData: {
+      data: base64,
+      mimeType: "image/png"
+    }
   });
+
+  }
 
 }
 // ===============================
