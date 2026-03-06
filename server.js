@@ -907,6 +907,9 @@ function rateLimitMiddleware(req, res, next) {
 // GEMINI PROXY (JWT)
 // ==================
 app.post("/api/generate-image", authMiddleware, async (req, res) => {
+
+let spentCost = 0;
+
   try {
     const {
   prompt,
@@ -1021,23 +1024,35 @@ if (last && now - last < GENERATION_DELAY_MS) {
 
 generationCooldown.set(id, now);
 
+// ===============================
+// 💰 TOKEN COST CALCULATION
+// ===============================
+
+let cost = 4.5; // Flash
+
+if (modelName === "gemini-3-pro-image-preview") {
+
+  if (imageSize === "1K") cost = 6;
+  if (imageSize === "2K") cost = 6.5;
+  if (imageSize === "4K") cost = 7;
+
+}
+
 // ======================================
 // 🔐 ПРОВЕРКА ПРАВ + АТОМАРНОЕ СПИСАНИЕ
 // ======================================
 if (role !== "admin") {
 
-  // списываем 1 токен ТОЛЬКО если он есть
   const debit = await pool.query(
-    `
-    UPDATE users
-    SET tokens = tokens - 1
-    WHERE id = $1 AND tokens > 0
-    RETURNING tokens
-    `,
-    [id]
-  );
+`
+UPDATE users
+SET tokens = tokens - $2
+WHERE id = $1 AND tokens >= $2
+RETURNING tokens
+`,
+[id, cost]
+);
 
-  // если токенов не было
   if (debit.rowCount === 0) {
     return res.status(403).json({
       error: "no_tokens",
@@ -1045,11 +1060,14 @@ if (role !== "admin") {
     });
   }
 
-  // лог
+  // запоминаем сколько списали
+  spentCost = cost;
+
+  // лог списания
   await pool.query(
     `INSERT INTO token_logs (user_id, change, reason)
      VALUES ($1, $2, 'generation')`,
-    [id, -1]
+    [id, -cost]
   );
 
 } else {
@@ -1463,17 +1481,47 @@ return res.json({
     // ======================================
 
   } catch (err) {
-    console.error("Gemini error:", err?.message || err);
 
-    if (err.name === "AbortError") {
-      return res.status(504).json({ error: "Gemini timeout" });
+  console.error("Gemini error:", err?.message || err);
+
+  // ===============================
+  // 🔄 TOKEN REFUND
+  // ===============================
+  if (spentCost > 0 && req.user?.role !== "admin") {
+
+    try {
+
+      await pool.query(
+        `UPDATE users SET tokens = tokens + $1 WHERE id = $2`,
+        [spentCost, req.user.id]
+      );
+
+      await pool.query(
+        `INSERT INTO token_logs (user_id, change, reason)
+         VALUES ($1, $2, 'generation_refund')`,
+        [req.user.id, spentCost]
+      );
+
+      console.log("🔄 tokens refunded:", spentCost);
+
+    } catch (refundErr) {
+
+      console.error("TOKEN REFUND ERROR:", refundErr);
+
     }
 
-    res.status(500).json({
-      error: "generation failed",
-      message: err?.message || "unknown error",
-    });
   }
+
+  if (err.name === "AbortError") {
+    return res.status(504).json({ error: "Gemini timeout" });
+  }
+
+  res.status(500).json({
+    error: "generation failed",
+    message: err?.message || "unknown error",
+  });
+  
+ }
 });
 
 // ===============================
