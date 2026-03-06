@@ -1108,18 +1108,32 @@ if (finalModel === "gemini-3-pro-image-preview") {
   // 👤 PEOPLE IMAGES (лица сохраняем)
   if (Array.isArray(peopleImages) && peopleImages.length > 0) {
 
-    peopleImages.forEach((img) => {
-      if (!img) return;
+    for (const img of peopleImages) {
 
-      const base64 = img.replace(/^data:.*;base64,/, "");
+  if (!img) continue;
 
-      parts.push({
-        inlineData: {
-          data: base64,
-          mimeType: "image/png"
-        }
-      });
-    });
+  let base64;
+
+  if (img.startsWith("http")) {
+
+    const response = await fetch(img);
+    const buffer = await response.arrayBuffer();
+    base64 = Buffer.from(buffer).toString("base64");
+
+  } else {
+
+    base64 = img.replace(/^data:.*;base64,/, "");
+
+  }
+
+  parts.push({
+    inlineData: {
+      data: base64,
+      mimeType: "image/png"
+    }
+  });
+
+}
 
     parts.push({
       text: "Preserve identity, facial structure, eyes, nose, mouth, proportions and skin tone of provided people images."
@@ -1155,18 +1169,32 @@ Do not invent a new person.
   // 🏞 OBJECT IMAGES (фон / одежда)
   if (Array.isArray(objectImages) && objectImages.length > 0) {
 
-    objectImages.forEach((img) => {
-      if (!img) return;
+    for (const img of objectImages) {
 
-      const base64 = img.replace(/^data:.*;base64,/, "");
+  if (!img) continue;
 
-      parts.push({
-        inlineData: {
-          data: base64,
-          mimeType: "image/png"
-        }
-      });
-    });
+  let base64;
+
+  if (img.startsWith("http")) {
+
+    const response = await fetch(img);
+    const buffer = await response.arrayBuffer();
+    base64 = Buffer.from(buffer).toString("base64");
+
+  } else {
+
+    base64 = img.replace(/^data:.*;base64,/, "");
+
+  }
+
+  parts.push({
+    inlineData: {
+      data: base64,
+      mimeType: "image/png"
+    }
+  });
+
+}
 
     parts.push({
       text: "Use object images as editable environment or clothing reference."
@@ -1187,18 +1215,32 @@ if (
     fallbackImages = [image];
   }
 
-  fallbackImages.forEach((img) => {
-    if (!img) return;
+  for (const img of fallbackImages) {
 
-    const base64 = img.replace(/^data:.*;base64,/, "");
+  if (!img) continue;
 
-    parts.push({
-      inlineData: {
-        data: base64,
-        mimeType: "image/png"
-      }
-    });
+  let base64;
+
+  if (img.startsWith("http")) {
+
+    const response = await fetch(img);
+    const buffer = await response.arrayBuffer();
+    base64 = Buffer.from(buffer).toString("base64");
+
+  } else {
+
+    base64 = img.replace(/^data:.*;base64,/, "");
+
+  }
+
+  parts.push({
+    inlineData: {
+      data: base64,
+      mimeType: "image/png"
+    }
   });
+
+}
 
 }
 }
