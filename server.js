@@ -523,6 +523,128 @@ app.get("/api/user/me", authMiddleware, async (req, res) => {
 });
 
 // ======================================================
+// 🤖 AI ASSISTANT
+// ======================================================
+
+// история сообщений
+app.get("/api/assistant/history", authMiddleware, async (req, res) => {
+
+  try {
+
+    const userId = req.user.id;
+
+    const result = await pool.query(
+      `
+      SELECT role, content, created_at
+      FROM assistant_messages
+      WHERE user_id = $1
+      ORDER BY created_at ASC
+      LIMIT 50
+      `,
+      [userId]
+    );
+
+    res.json({
+      ok: true,
+      messages: result.rows
+    });
+
+  } catch (e) {
+
+    console.error("ASSISTANT HISTORY ERROR:", e);
+
+    res.status(500).json({
+      ok: false
+    });
+
+  }
+
+});
+
+
+// отправка сообщения ассистенту
+app.post("/api/assistant", authMiddleware, async (req, res) => {
+
+  try {
+
+    const { message } = req.body;
+    const userId = req.user.id;
+
+    if (!message) {
+      return res.status(400).json({
+        ok: false,
+        error: "message required"
+      });
+    }
+
+    // ===============================
+    // 🔒 ПРОВЕРКА ПОДПИСКИ
+    // ===============================
+    if (req.user.role !== "admin") {
+
+      const sub = await pool.query(
+        "SELECT expires_at FROM subscriptions WHERE user_id = $1",
+        [userId]
+      );
+
+      if (!sub.rows.length || new Date(sub.rows[0].expires_at) < new Date()) {
+        return res.status(403).json({
+          ok: false,
+          error: "subscription_required"
+        });
+      }
+
+    }
+
+    // сохраняем сообщение пользователя
+    await pool.query(
+      `
+      INSERT INTO assistant_messages (user_id, role, content)
+      VALUES ($1, 'user', $2)
+      `,
+      [userId, message]
+    );
+
+    // ===============================
+    // 🤖 ЗАПРОС В GEMINI
+    // ===============================
+
+    const aiResponse = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: message
+    });
+
+    const reply =
+      aiResponse?.candidates?.[0]?.content?.parts?.[0]?.text ||
+      "Не удалось получить ответ";
+
+    // сохраняем ответ ассистента
+    await pool.query(
+      `
+      INSERT INTO assistant_messages (user_id, role, content)
+      VALUES ($1, 'assistant', $2)
+      `,
+      [userId, reply]
+    );
+
+    res.json({
+      ok: true,
+      reply
+    });
+
+  } catch (e) {
+
+    console.error("ASSISTANT ERROR:", e);
+
+    res.status(500).json({
+      ok: false
+    });
+
+  }
+
+});
+
+// ======================================================
 // IMAGE UPLOAD (PROMPT CARD)
 // ======================================================
 
