@@ -610,9 +610,36 @@ app.post("/api/assistant", authMiddleware, async (req, res) => {
     // ===============================
 
     const aiResponse = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: message
-    });
+  model: "gemini-2.5-flash",
+  contents: [
+    {
+      role: "user",
+      parts: [
+        {
+          text: `
+You are AI assistant inside the dizAIn image generation platform.
+
+Your job:
+- help users write better prompts
+- explain how to generate better images
+- help with image editing
+- suggest prompt improvements
+
+The platform supports:
+- AI image generation
+- image editing
+- multiple reference images
+- identity preservation
+- cinematic realism
+
+User message:
+${message}
+`
+        }
+      ]
+    }
+  ]
+});
 
     const reply =
       aiResponse?.candidates?.[0]?.content?.parts?.[0]?.text ||
