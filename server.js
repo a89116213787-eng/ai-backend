@@ -13,6 +13,7 @@ import { uploadToR2 } from "./utils/uploadToR2.js";
 import sharp from "sharp";
 import { S3Client, GetObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
 import deleteImageRoute from "./delete-image.js";
+import multer from "multer";
 
 async function normalizeImageToBase64(img) {
 
@@ -526,6 +527,10 @@ app.get("/api/user/me", authMiddleware, async (req, res) => {
 // 🤖 AI ASSISTANT
 // ======================================================
 
+    const upload = multer({
+      storage: multer.memoryStorage()
+    });
+
 // история сообщений
 app.get("/api/assistant/history", authMiddleware, async (req, res) => {
 
@@ -563,12 +568,33 @@ app.get("/api/assistant/history", authMiddleware, async (req, res) => {
 
 
 // отправка сообщения ассистенту
-app.post("/api/assistant", authMiddleware, async (req, res) => {
+app.post("/api/assistant", authMiddleware, upload.array("images",3), async (req, res) => {
 
   try {
 
     const { message } = req.body;
     const userId = req.user.id;
+
+    const parts = [];
+
+parts.push({
+  text: message
+});
+
+if(req.files){
+
+  req.files.forEach(file => {
+
+    parts.push({
+      inlineData:{
+        mimeType:file.mimetype,
+        data:file.buffer.toString("base64")
+      }
+    });
+
+  });
+
+}
 
     if (!message) {
       return res.status(400).json({
@@ -619,6 +645,14 @@ app.post("/api/assistant", authMiddleware, async (req, res) => {
           text: `
 You are AI assistant inside the dizAIn image generation platform.
 
+IMPORTANT LANGUAGE RULES:
+
+Primary language: Russian
+Secondary language: English
+
+If the user writes in Russian — always answer in Russian.
+If the user writes in English — answer in English.
+
 Your job:
 - help users write better prompts
 - explain how to generate better images
@@ -631,11 +665,12 @@ The platform supports:
 - multiple reference images
 - identity preservation
 - cinematic realism
-
-User message:
-${message}
 `
-        }
+        },
+        {
+          text: message
+        },
+        ...parts.slice(1)
       ]
     }
   ]
