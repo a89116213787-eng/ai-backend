@@ -11,6 +11,7 @@ import dotenv from "dotenv";
 import { sendMail } from "./src/services/mailClient.js";
 import { uploadToR2 } from "./utils/uploadToR2.js";
 import sharp from "sharp";
+import Replicate from "replicate";
 import { S3Client, GetObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
 import deleteImageRoute from "./delete-image.js";
 import multer from "multer";
@@ -91,6 +92,28 @@ if (!process.env.JWT_SECRET) {
 const ai = new GoogleGenAI({
   apiKey: process.env.GEMINI_API_KEY
 });
+
+// ===============================
+// KLING / REPLICATE CLIENT
+// ===============================
+const replicate = new Replicate({
+  auth: process.env.REPLICATE_API_TOKEN
+});
+
+// ===============================
+// KLING MODELS
+// ===============================
+const KLING_MODELS = {
+
+  flash: "kwaivgi/kling-v2.1",
+
+  pro: "kwaivgi/kling-v2.6",
+
+  ultra: "kwaivgi/kling-v3-omni-video",
+
+  motion: "kwaivgi/kling-v3-motion-control"
+
+};
 
 // ==================
 // JWT MIDDLEWARE
@@ -2099,6 +2122,172 @@ app.get("/api/download/:id", authMiddleware, async (req, res) => {
     console.error("DOWNLOAD ERROR", e);
     res.status(500).json({ error: "download failed" });
   }
+});
+
+// ======================================================
+// 🎬 VIDEO GENERATION (KLING)
+// ======================================================
+
+app.post("/api/generate-video", authMiddleware, async (req, res) => {
+
+  let spentCost = 0;
+
+  try {
+
+    const { prompt, image, model, duration } = req.body;
+
+    const { id, role } = req.user;
+
+    // ===============================
+    // 🔒 SUBSCRIPTION CHECK
+    // ===============================
+    if (role !== "admin") {
+
+      const sub = await pool.query(
+        "SELECT expires_at FROM subscriptions WHERE user_id = $1",
+        [id]
+      );
+
+      if (!sub.rows.length || new Date(sub.rows[0].expires_at) < new Date()) {
+        return res.status(403).json({
+          ok: false,
+          message: "Подписка закончилась"
+        });
+      }
+
+    }
+
+    // ===============================
+    // 💰 TOKEN COST
+    // ===============================
+
+    let cost = 12;
+
+    if (model === "pro") cost = 16;
+    if (model === "ultra") cost = 20;
+
+    if (role !== "admin") {
+
+      const debit = await pool.query(
+        `
+        UPDATE users
+        SET tokens = tokens - $2
+        WHERE id = $1 AND tokens >= $2
+        RETURNING tokens
+        `,
+        [id, cost]
+      );
+
+      if (debit.rowCount === 0) {
+
+        return res.status(403).json({
+          error: "no_tokens"
+        });
+
+      }
+
+      spentCost = cost;
+
+    }
+
+    // ===============================
+    // NORMALIZE IMAGE
+    // ===============================
+
+    let startImage = null;
+
+    if (image) {
+
+      if (typeof image === "string" && image.startsWith("data:")) {
+
+        const base64 = image.replace(/^data:.*;base64,/, "");
+        const buffer = Buffer.from(base64, "base64");
+
+        const url = await uploadToR2(buffer);
+
+        startImage = url;
+
+      }
+
+      else if (typeof image === "string" && image.startsWith("http")) {
+
+        startImage = image;
+
+      }
+
+    }
+
+    // ===============================
+    // MODEL SELECT
+    // ===============================
+
+    const klingModel = KLING_MODELS[model || "flash"];
+
+    const input = {
+     prompt,
+     duration: duration || 5
+    };
+  
+    if (startImage) {
+      input.start_image = startImage;
+    }
+
+    // ===============================
+    // GENERATION
+    // ===============================
+
+    const output = await replicate.run(
+
+      klingModel,
+
+      { input }
+
+    );
+
+    let videoUrl;
+
+if (typeof output === "string") {
+  videoUrl = output;
+}
+else if (output?.url) {
+  videoUrl = output.url;
+}
+else if (Array.isArray(output) && output[0]) {
+  videoUrl = output[0];
+}
+else {
+  throw new Error("Invalid Kling response");
+}
+
+    return res.json({
+
+      ok: true,
+      video: videoUrl
+
+    });
+
+  }
+
+  catch (err) {
+
+    console.error("KLING ERROR:", err);
+
+    if (spentCost > 0 && req.user?.role !== "admin") {
+
+      await pool.query(
+        `UPDATE users SET tokens = tokens + $1 WHERE id = $2`,
+        [spentCost, req.user.id]
+      );
+
+    }
+
+    res.status(500).json({
+      ok: false,
+      error: "video_generation_failed"
+    });
+
+  }
+
 });
 
 // ======================================
