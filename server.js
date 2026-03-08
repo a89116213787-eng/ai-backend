@@ -531,6 +531,252 @@ app.get("/api/user/me", authMiddleware, async (req, res) => {
       storage: multer.memoryStorage()
     });
 
+    const GENERATOR_CAPABILITIES = {
+  models: [
+    "gemini-2.5-flash-image",
+    "gemini-3-pro-image-preview"
+  ],
+
+  aspectRatios: [
+    "1:1",
+    "3:4",
+    "4:3",
+    "9:16",
+    "16:9"
+  ],
+
+  imageSizes: [
+    "1024",
+    "1536",
+    "2048"
+  ],
+
+  maxImages: 4,
+
+  features: [
+    "text_to_image",
+    "image_to_image",
+    "image_editing",
+    "multiple_images",
+    "style_transfer",
+    "character_consistency",
+    "multimodal_prompts"
+  ]
+};
+
+    const SYSTEM_PROMPT = `
+You are an AI assistant inside the dizAIn image and video generation platform.
+
+ASSISTANT ROLE
+
+Your name is dizAIn AI.
+
+You help users:
+
+— create high quality prompts for real AI models used in the platform
+— improve prompts
+— explain styles
+— analyze images
+— suggest prompt improvements
+— help understand generation tools
+— communicate like a friendly human assistant
+
+You generate prompts optimized for the platform models.
+
+LANGUAGE RULES
+
+Primary language: Russian
+Secondary language: English
+
+If user writes in Russian — answer in Russian.
+If user writes in English — answer in English.
+
+ASSISTANT BEHAVIOR
+
+Answer briefly and clearly.
+
+Do not write long explanations unless the user asks.
+
+If user asks for a prompt — immediately provide a ready prompt.
+
+Do not introduce yourself in every message.
+
+Do not greet in every message.
+
+Write like a normal human, friendly tone, emojis allowed.
+
+PROMPT FORMAT
+
+If user asks for a prompt respond exactly like this:
+
+Prompt:
+<generated prompt>
+
+MODEL DISCLOSURE RULE
+
+If user asks what models are used respond:
+
+"Собственные генеративные модели ИИ"
+
+RESTRICTIONS
+
+Do not invent platform features.
+
+Do not invent settings.
+
+If unsure say you are not sure.
+
+Do not repeat your role every message.
+
+Do not write unnecessary text.
+
+Stay professional and polite.
+
+PLATFORM CONTEXT
+
+The dizAIn platform allows users to:
+
+— generate images
+— generate video
+— edit images
+— use prompt cards
+— create custom generations
+
+IMAGE GENERATION CAPABILITIES
+
+Text → Image
+
+Image → Image editing
+
+Image Editing:
+object editing
+background change
+style change
+inpainting
+
+Multiple image references
+
+Style transfer
+
+Character consistency
+
+Aspect ratio:
+1:1
+3:4
+4:3
+9:16
+16:9
+
+Image sizes:
+1024
+1536
+2048
+
+Multimodal prompts (text + images)
+
+Scene understanding:
+lighting
+composition
+camera
+depth
+style
+
+IMAGE ANALYSIS
+
+You can:
+
+describe images
+detect style
+detect composition
+detect objects
+detect atmosphere
+convert image → prompt
+improve prompts
+generate prompt variations
+generate image ideas
+
+VIDEO GENERATION CAPABILITIES
+
+Text → Video
+
+Image → Video
+
+Frame animation
+
+Camera motion:
+pan
+zoom
+tilt
+orbit
+dolly
+tracking shot
+
+Character motion
+
+Physics simulation
+
+Character consistency
+
+Style control:
+cinematic
+anime
+realistic
+3D
+cartoon
+fantasy
+sci-fi
+
+Lighting control
+
+Scene composition
+
+Object interaction
+
+Environment animation:
+water
+wind
+clouds
+fire
+
+Facial animation
+
+Cinematic shots:
+wide shot
+close-up
+medium shot
+drone shot
+
+Depth understanding
+
+Motion consistency
+
+Loop video
+
+HD video generation
+
+Weather effects:
+rain
+snow
+fog
+wind
+
+Cinematic effects:
+depth of field
+motion blur
+lens flare
+film grain
+
+Animation styles:
+Pixar style
+anime
+3D animation
+cartoon
+
+Complex scenes
+dynamic scenes
+creative scenes
+`;
+
 // история сообщений
 app.get("/api/assistant/history", authMiddleware, async (req, res) => {
 
@@ -544,7 +790,7 @@ app.get("/api/assistant/history", authMiddleware, async (req, res) => {
       FROM assistant_messages
       WHERE user_id = $1
       ORDER BY created_at ASC
-      LIMIT 50
+      LIMIT 30
       `,
       [userId]
     );
@@ -632,78 +878,135 @@ if(req.files){
     );
 
     // ===============================
-    // 🤖 ЗАПРОС В GEMINI
-    // ===============================
+// 🤖 ЗАПРОС В GEMINI
+// ===============================
 
-    const aiResponse = await ai.models.generateContent({
+// ===============================
+// 🧠 ЗАГРУЖАЕМ КОНТЕКСТ ДИАЛОГА
+// ===============================
+const historyResult = await pool.query(
+`
+SELECT role, content
+FROM assistant_messages
+WHERE user_id = $1
+ORDER BY created_at DESC
+LIMIT 9
+`,
+[userId]
+);
+
+const historyMessages = historyResult.rows.reverse();
+
+res.setHeader("Content-Type", "text/event-stream");
+res.setHeader("Cache-Control", "no-cache");
+res.setHeader("Connection", "keep-alive");
+
+res.flushHeaders();
+
+let reply = "";
+
+const stream = await ai.models.generateContentStream({
   model: "gemini-2.5-flash",
+
+  config: {
+    systemInstruction: `
+${SYSTEM_PROMPT}
+
+REAL GENERATOR SETTINGS
+
+The platform uses these real generator settings:
+
+Models:
+${GENERATOR_CAPABILITIES.models.join(", ")}
+
+Aspect Ratios:
+${GENERATOR_CAPABILITIES.aspectRatios.join(", ")}
+
+Image Sizes:
+${GENERATOR_CAPABILITIES.imageSizes.join(", ")}
+
+Maximum images per request:
+${GENERATOR_CAPABILITIES.maxImages}
+`,
+    temperature: 0.7,
+    maxOutputTokens: 1000
+  },
+
   contents: [
+
+    ...historyMessages.map(m => ({
+      role: m.role === "assistant" ? "model" : "user",
+      parts: [{ text: m.content }]
+    })),
+
     {
       role: "user",
       parts: [
-        {
-          text: `
-You are AI assistant inside the dizAIn image generation platform.
-
-IMPORTANT LANGUAGE RULES:
-
-Primary language: Russian
-Secondary language: English
-
-If the user writes in Russian — always answer in Russian.
-If the user writes in English — answer in English.
-
-Your job:
-- help users write better prompts
-- explain how to generate better images
-- help with image editing
-- suggest prompt improvements
-
-The platform supports:
-- AI image generation
-- image editing
-- multiple reference images
-- identity preservation
-- cinematic realism
-`
-        },
-        {
-          text: message
-        },
+        { text: message },
         ...parts.slice(1)
       ]
     }
+
   ]
 });
 
-    const reply =
-      aiResponse?.candidates?.[0]?.content?.parts?.[0]?.text ||
-      "Не удалось получить ответ";
+for await (const chunk of stream) {
 
-    // сохраняем ответ ассистента
-    await pool.query(
-      `
-      INSERT INTO assistant_messages (user_id, role, content)
-      VALUES ($1, 'assistant', $2)
-      `,
-      [userId, reply]
-    );
+  const text =
+    chunk?.candidates?.[0]?.content?.parts?.[0]?.text || "";
 
-    res.json({
-      ok: true,
-      reply
-    });
+  if (text) {
 
-  } catch (e) {
+    reply += text;
 
-    console.error("ASSISTANT ERROR:", e);
-
-    res.status(500).json({
-      ok: false
-    });
+    res.write(`data: ${JSON.stringify({ token: text })}\n\n`);
 
   }
 
+}
+
+res.write(`data: [DONE]\n\n`);
+
+// ===============================
+// 💾 СОХРАНЯЕМ ОТВЕТ АССИСТЕНТА
+// ===============================
+await pool.query(
+`
+INSERT INTO assistant_messages (user_id, role, content)
+VALUES ($1, 'assistant', $2)
+`,
+[userId, reply]
+);
+
+// ===============================
+// 🧹 ОЧИСТКА СТАРЫХ СООБЩЕНИЙ (оставляем 30)
+// ===============================
+await pool.query(
+`
+DELETE FROM assistant_messages
+WHERE id IN (
+  SELECT id FROM assistant_messages
+  WHERE user_id = $1
+  ORDER BY created_at DESC
+  OFFSET 30
+)
+`,
+[userId]
+);
+
+res.end();
+
+} catch (e) {
+
+console.error("ASSISTANT ERROR:", e);
+
+if (!res.headersSent) {
+  res.status(500).json({
+    ok: false
+  });
+}
+
+}
 });
 
 // ======================================================
