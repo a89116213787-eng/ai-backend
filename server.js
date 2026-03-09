@@ -12,7 +12,7 @@ import { sendMail } from "./src/services/mailClient.js";
 import { uploadToR2 } from "./utils/uploadToR2.js";
 import sharp from "sharp";
 import Replicate from "replicate";
-import { S3Client, GetObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, GetObjectCommand, DeleteObjectCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
 import deleteImageRoute from "./delete-image.js";
 import multer from "multer";
 
@@ -2285,16 +2285,16 @@ app.get("/api/video-status/:id", authMiddleware, async (req, res) => {
 
     const id = req.params.id;
 
-// если уже загружали видео — отдаём сразу
-if (videoCache.has(id)) {
-  return res.json({
-    ok: true,
-    status: "done",
-    video: videoCache.get(id)
-  });
-}
+    // если уже загружали видео — отдаём сразу
+    if (videoCache.has(id)) {
+      return res.json({
+        ok: true,
+        status: "done",
+        video: videoCache.get(id)
+      });
+    }
 
-    const prediction = await replicate.predictions.get(req.params.id);
+    const prediction = await replicate.predictions.get(id);
 
     if (prediction.status === "succeeded") {
 
@@ -2305,13 +2305,25 @@ if (videoCache.has(id)) {
       }
 
       // скачиваем видео
-  const response = await fetch(videoUrl);
-  const buffer = Buffer.from(await response.arrayBuffer());
+      const response = await fetch(videoUrl);
+      const buffer = Buffer.from(await response.arrayBuffer());
 
-  // загружаем в R2 (как обычное изображение)
-  const uploadedUrl = await uploadToR2(buffer);
+      // загружаем в R2 как mp4
+      const key = `videos/${crypto.randomUUID()}.mp4`;
 
-  videoCache.set(req.params.id, uploadedUrl);
+      await s3.send(
+        new PutObjectCommand({
+          Bucket: process.env.R2_BUCKET,
+          Key: key,
+          Body: buffer,
+          ContentType: "video/mp4"
+        })
+      );
+
+      const uploadedUrl = `${process.env.R2_PUBLIC_URL}/${key}`;
+
+      // кэшируем
+      videoCache.set(id, uploadedUrl);
 
       return res.json({
         ok: true,
@@ -2387,6 +2399,65 @@ async function cleanupOldGenerations() {
 }
 
 setInterval(cleanupOldGenerations, 24 * 60 * 60 * 1000);
+
+// ======================================
+// AUTO CLEANUP OLD VIDEOS (7 days)
+// ======================================
+
+async function cleanupOldVideos() {
+
+  try {
+
+    const s3 = new S3Client({
+      region: "auto",
+      endpoint: process.env.R2_ENDPOINT,
+      credentials: {
+        accessKeyId: process.env.R2_ACCESS_KEY,
+        secretAccessKey: process.env.R2_SECRET_KEY
+      }
+    });
+
+    const list = await s3.send(
+      new ListObjectsV2Command({
+        Bucket: process.env.R2_BUCKET,
+        Prefix: "videos/"
+      })
+    );
+
+    if (!list.Contents) return;
+
+    const now = Date.now();
+
+    for (const file of list.Contents) {
+
+      const age = now - new Date(file.LastModified).getTime();
+      const days = age / (1000 * 60 * 60 * 24);
+
+      if (days > 7) {
+
+        await s3.send(
+          new DeleteObjectCommand({
+            Bucket: process.env.R2_BUCKET,
+            Key: file.Key
+          })
+        );
+
+        console.log("🧹 deleted old video:", file.Key);
+
+      }
+
+    }
+
+  } catch (err) {
+
+    console.error("VIDEO CLEANUP ERROR:", err);
+
+  }
+
+}
+
+// запуск раз в день
+setInterval(cleanupOldVideos, 24 * 60 * 60 * 1000);
 
 // ==================
 // START SERVER
