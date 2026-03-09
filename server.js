@@ -2300,13 +2300,28 @@ app.get("/api/video-status/:id", authMiddleware, async (req, res) => {
 
       let videoUrl = prediction.output;
 
-      if (Array.isArray(videoUrl)) {
-        videoUrl = videoUrl[0];
-      }
+if (Array.isArray(videoUrl)) {
+  videoUrl = videoUrl[0];
+}
+
+if (typeof videoUrl === "object" && videoUrl?.video) {
+  videoUrl = videoUrl.video;
+}
 
       // скачиваем видео
       const response = await fetch(videoUrl);
-      const buffer = Buffer.from(await response.arrayBuffer());
+
+if (!response.ok) {
+  throw new Error("Video download failed from replicate");
+}
+
+const arrayBuffer = await response.arrayBuffer();
+
+if (!arrayBuffer || arrayBuffer.byteLength < 1000) {
+  throw new Error("Video file is empty");
+}
+
+const buffer = Buffer.from(arrayBuffer);
 
       // создаём R2 клиент
 const s3 = new S3Client({
