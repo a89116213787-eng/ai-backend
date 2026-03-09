@@ -2163,13 +2163,14 @@ app.post("/api/generate-video", authMiddleware, async (req, res) => {
     }
 
     // ===============================
-    // 💰 TOKEN COST
+    // 💰 TOKEN COST (VIDEO)
     // ===============================
 
-    let cost = 12;
+    let cost = 60; // Flash 2.1
 
-    if (model === "pro") cost = 16;
-    if (model === "ultra") cost = 20;
+    if (model === "kwaivgi/kling-v2.6") cost = 90;
+    if (model === "kwaivgi/kling-v3-omni-video") cost = 120;
+    if (model === "kwaivgi/kling-v3-motion-control") cost = 120;
 
     if (role !== "admin") {
 
@@ -2354,7 +2355,6 @@ videoCache.set(id, videoKey);
 return res.json({
   ok: true,
   status: "done",
-  video: `${process.env.R2_PUBLIC_URL}/videos/${key}`,
   video: `https://ai-backend-bd2h.onrender.com/api/download-video/${videoKey}`
 });
 
