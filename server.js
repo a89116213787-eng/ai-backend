@@ -12,7 +12,7 @@ import { sendMail } from "./src/services/mailClient.js";
 import { uploadToR2 } from "./utils/uploadToR2.js";
 import sharp from "sharp";
 import Replicate from "replicate";
-import { S3Client, GetObjectCommand, DeleteObjectCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
+import { S3Client, GetObjectCommand, PutObjectCommand, DeleteObjectCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
 import deleteImageRoute from "./delete-image.js";
 import multer from "multer";
 
