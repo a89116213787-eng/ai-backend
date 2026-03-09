@@ -2354,6 +2354,7 @@ videoCache.set(id, videoKey);
 return res.json({
   ok: true,
   status: "done",
+  video: `${process.env.R2_PUBLIC_URL}/videos/${key}`,
   video: `https://ai-backend-bd2h.onrender.com/api/download-video/${videoKey}`
 });
 
@@ -2411,9 +2412,10 @@ app.get("/api/download-video/:key", async (req, res) => {
     const buffer = Buffer.concat(chunks);
 
     res.setHeader("Content-Type", "video/mp4");
-
-    res.setHeader("Content-Type", "video/mp4");
-res.setHeader("Content-Disposition", "inline");
+    res.setHeader(
+      "Content-Disposition",
+      'attachment; filename="video.mp4"'
+    );
 
     res.send(buffer);
 
