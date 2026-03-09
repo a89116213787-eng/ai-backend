@@ -2221,7 +2221,7 @@ app.post("/api/generate-video", authMiddleware, async (req, res) => {
     // MODEL SELECT
     // ===============================
 
-    const klingModel = KLING_MODELS[model || "flash"];
+    const klingModel = model || KLING_MODELS.flash;
 
     const input = {
      prompt,
