@@ -2311,7 +2311,7 @@ app.get("/api/video-status/:id", authMiddleware, async (req, res) => {
       // создаём R2 клиент
 const s3 = new S3Client({
   region: "auto",
-  endpoint: process.env.R2_ENDPOINT,
+  endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
   credentials: {
     accessKeyId: process.env.R2_ACCESS_KEY,
     secretAccessKey: process.env.R2_SECRET_KEY
