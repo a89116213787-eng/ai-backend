@@ -2255,7 +2255,7 @@ return res.json({
 
   catch (err) {
 
-    console.error("KLING ERROR:", err);а
+    console.error("KLING ERROR:", err);
 
     if (spentCost > 0 && req.user?.role !== "admin") {
 
@@ -2345,16 +2345,17 @@ const s3 = new S3Client({
         })
       );
 
-      const uploadedUrl = `${process.env.R2_PUBLIC_URL}/${key}`;
+      // получаем имя файла
+const videoKey = key.split("videos/")[1];
 
-      // кэшируем
-      videoCache.set(id, uploadedUrl);
+// кэшируем
+videoCache.set(id, videoKey);
 
-      return res.json({
-        ok: true,
-        status: "done",
-        video: uploadedUrl
-      });
+return res.json({
+  ok: true,
+  status: "done",
+  video: `/api/download-video/${videoKey}`
+});
 
     }
 
@@ -2366,6 +2367,61 @@ const s3 = new S3Client({
   } catch (e) {
 
     console.error("VIDEO STATUS ERROR:", e);
+
+    res.status(500).json({
+      ok: false
+    });
+
+  }
+
+});
+
+// ======================================================
+// 🎬 VIDEO DOWNLOAD (R2 → USER)
+// ======================================================
+
+app.get("/api/download-video/:key", authMiddleware, async (req, res) => {
+
+  try {
+
+    const { key } = req.params;
+
+    const s3 = new S3Client({
+      region: "auto",
+      endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+      credentials: {
+        accessKeyId: process.env.R2_ACCESS_KEY,
+        secretAccessKey: process.env.R2_SECRET_KEY
+      }
+    });
+
+    const object = await s3.send(
+      new GetObjectCommand({
+        Bucket: process.env.R2_BUCKET,
+        Key: `videos/${key}`
+      })
+    );
+
+    const chunks = [];
+
+    for await (const chunk of object.Body) {
+      chunks.push(chunk);
+    }
+
+    const buffer = Buffer.concat(chunks);
+
+    res.setHeader("Content-Type", "video/mp4");
+
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="video.mp4"`
+    );
+
+    res.send(buffer);
+
+  } catch (e) {
+
+    console.error("VIDEO DOWNLOAD ERROR:", e);
 
     res.status(500).json({
       ok: false
