@@ -2380,7 +2380,7 @@ return res.json({
 // 🎬 VIDEO DOWNLOAD (R2 → USER)
 // ======================================================
 
-app.get("/api/download-video/:key", authMiddleware, async (req, res) => {
+app.get("/api/download-video/:key", async (req, res) => {
 
   try {
 
