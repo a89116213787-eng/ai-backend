@@ -2308,6 +2308,16 @@ app.get("/api/video-status/:id", authMiddleware, async (req, res) => {
       const response = await fetch(videoUrl);
       const buffer = Buffer.from(await response.arrayBuffer());
 
+      // создаём R2 клиент
+const s3 = new S3Client({
+  region: "auto",
+  endpoint: process.env.R2_ENDPOINT,
+  credentials: {
+    accessKeyId: process.env.R2_ACCESS_KEY,
+    secretAccessKey: process.env.R2_SECRET_KEY
+  }
+});
+
       // загружаем в R2 как mp4
       const key = `videos/${crypto.randomUUID()}.mp4`;
 
