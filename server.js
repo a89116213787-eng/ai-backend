@@ -2236,35 +2236,15 @@ app.post("/api/generate-video", authMiddleware, async (req, res) => {
     // GENERATION
     // ===============================
 
-    const output = await replicate.run(
+    const prediction = await replicate.predictions.create({
+  model: klingModel,
+  input
+});
 
-      klingModel,
-
-      { input }
-
-    );
-
-    let videoUrl;
-
-if (typeof output === "string") {
-  videoUrl = output;
-}
-else if (output?.url) {
-  videoUrl = output.url;
-}
-else if (Array.isArray(output) && output[0]) {
-  videoUrl = output[0];
-}
-else {
-  throw new Error("Invalid Kling response");
-}
-
-    return res.json({
-
-      ok: true,
-      video: videoUrl
-
-    });
+return res.json({
+  ok: true,
+  prediction_id: prediction.id
+});
 
   }
 
@@ -2284,6 +2264,49 @@ else {
     res.status(500).json({
       ok: false,
       error: "video_generation_failed"
+    });
+
+  }
+
+});
+
+// ======================================================
+// 🎬 VIDEO STATUS CHECK
+// ======================================================
+
+app.get("/api/video-status/:id", authMiddleware, async (req, res) => {
+
+  try {
+
+    const prediction = await replicate.predictions.get(req.params.id);
+
+    if (prediction.status === "succeeded") {
+
+      let videoUrl = prediction.output;
+
+      if (Array.isArray(videoUrl)) {
+        videoUrl = videoUrl[0];
+      }
+
+      return res.json({
+        ok: true,
+        status: "done",
+        video: videoUrl
+      });
+
+    }
+
+    return res.json({
+      ok: true,
+      status: prediction.status
+    });
+
+  } catch (e) {
+
+    console.error("VIDEO STATUS ERROR:", e);
+
+    res.status(500).json({
+      ok: false
     });
 
   }
