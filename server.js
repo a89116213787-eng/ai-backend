@@ -101,6 +101,11 @@ const replicate = new Replicate({
 });
 
 // ===============================
+// VIDEO CACHE
+// ===============================
+const videoCache = new Map();
+
+// ===============================
 // KLING MODELS
 // ===============================
 const KLING_MODELS = {
@@ -2250,7 +2255,7 @@ return res.json({
 
   catch (err) {
 
-    console.error("KLING ERROR:", err);
+    console.error("KLING ERROR:", err);а
 
     if (spentCost > 0 && req.user?.role !== "admin") {
 
@@ -2278,6 +2283,17 @@ app.get("/api/video-status/:id", authMiddleware, async (req, res) => {
 
   try {
 
+    const id = req.params.id;
+
+// если уже загружали видео — отдаём сразу
+if (videoCache.has(id)) {
+  return res.json({
+    ok: true,
+    status: "done",
+    video: videoCache.get(id)
+  });
+}
+
     const prediction = await replicate.predictions.get(req.params.id);
 
     if (prediction.status === "succeeded") {
@@ -2288,10 +2304,19 @@ app.get("/api/video-status/:id", authMiddleware, async (req, res) => {
         videoUrl = videoUrl[0];
       }
 
+      // скачиваем видео
+  const response = await fetch(videoUrl);
+  const buffer = Buffer.from(await response.arrayBuffer());
+
+  // загружаем в R2 (как обычное изображение)
+  const uploadedUrl = await uploadToR2(buffer);
+
+  videoCache.set(req.params.id, uploadedUrl);
+
       return res.json({
         ok: true,
         status: "done",
-        video: videoUrl
+        video: uploadedUrl
       });
 
     }
