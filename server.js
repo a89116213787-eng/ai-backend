@@ -2955,20 +2955,20 @@ app.post("/api/admin/set-admin-subscription", authMiddleware, requireAdmin, asyn
 
     await pool.query(
       `
-      INSERT INTO subscriptions (user_id, expires_at)
-      VALUES ($1, '2100-01-01')
-      ON CONFLICT (user_id)
-      DO UPDATE SET expires_at = '2100-01-01'
+      UPDATE users
+      SET admin_subscription = true
+      WHERE id = $1
       `,
       [userId]
     );
 
-    res.json({ ok:true });
+    res.json({ ok: true });
 
-  } catch(e) {
+  } catch (e) {
 
-    console.error("ADMIN ROLE ERROR:",e);
-    res.status(500).json({ ok:false });
+    console.error("ADMIN SUB ERROR:", e);
+
+    res.status(500).json({ ok: false });
 
   }
 });
