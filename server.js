@@ -430,7 +430,33 @@ app.get("/", (req, res) => {
 // ---------- REGISTER ----------
 app.post("/api/auth/register", async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { email, password, captcha } = req.body;
+
+    // ===============================
+    // CLOUDFLARE TURNSTILE CHECK
+    // ===============================
+    const verify = await fetch(
+      "https://challenges.cloudflare.com/turnstile/v0/siteverify",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded"
+        },
+        body: new URLSearchParams({
+          secret: process.env.TURNSTILE_SECRET,
+          response: captcha
+        })
+      }
+    );
+
+    const captchaResult = await verify.json();
+
+    if (!captchaResult.success) {
+      return res.status(400).json({
+        ok: false,
+        error: "captcha_failed"
+      });
+    }
 
     if (!email || !password) {
       return res.status(400).json({
