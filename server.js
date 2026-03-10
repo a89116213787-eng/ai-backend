@@ -2895,9 +2895,10 @@ app.post("/api/admin/set-admin-subscription", authMiddleware, requireAdmin, asyn
 
     await pool.query(
       `
-      UPDATE users
-      SET role = 'admin'
-      WHERE id = $1
+      INSERT INTO subscriptions (user_id, expires_at)
+      VALUES ($1, '2100-01-01')
+      ON CONFLICT (user_id)
+      DO UPDATE SET expires_at = '2100-01-01'
       `,
       [userId]
     );
