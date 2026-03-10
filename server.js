@@ -2846,3 +2846,68 @@ app.get("/api/admin/payments", authMiddleware, async (req, res) => {
     });
   }
 });
+
+// ======================================================
+// ADMIN — ACTIVATE MONTH SUBSCRIPTION
+// ======================================================
+
+app.post("/api/admin/activate-month-subscription", authMiddleware, requireAdmin, async (req, res) => {
+  try {
+
+    const { userId } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({ ok:false });
+    }
+
+    const expirationDate = new Date();
+    expirationDate.setMonth(expirationDate.getMonth() + 1);
+
+    await pool.query(
+      `
+      INSERT INTO subscriptions (user_id, expires_at)
+      VALUES ($1,$2)
+      ON CONFLICT (user_id)
+      DO UPDATE SET expires_at = $2
+      `,
+      [userId, expirationDate]
+    );
+
+    res.json({ ok:true });
+
+  } catch(e) {
+
+    console.error("ADMIN SUB ERROR:",e);
+    res.status(500).json({ ok:false });
+
+  }
+});
+
+
+// ======================================================
+// ADMIN — ADMIN SUBSCRIPTION (NO TOKEN LIMIT)
+// ======================================================
+
+app.post("/api/admin/set-admin-subscription", authMiddleware, requireAdmin, async (req, res) => {
+  try {
+
+    const { userId } = req.body;
+
+    await pool.query(
+      `
+      UPDATE users
+      SET role = 'admin'
+      WHERE id = $1
+      `,
+      [userId]
+    );
+
+    res.json({ ok:true });
+
+  } catch(e) {
+
+    console.error("ADMIN ROLE ERROR:",e);
+    res.status(500).json({ ok:false });
+
+  }
+});
