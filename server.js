@@ -335,6 +335,66 @@ app.post("/api/admin/add-tokens", authMiddleware, requireAdmin, async (req, res)
 });
 
 // ======================================================
+// ADMIN — DELETE USER (SAFE)
+// ======================================================
+
+app.post("/api/admin/delete-user", authMiddleware, requireAdmin, async (req, res) => {
+  try {
+
+    const { userId } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({ ok:false });
+    }
+
+    // получаем пользователя
+    const user = await pool.query(
+      `SELECT id, role FROM users WHERE id = $1`,
+      [userId]
+    );
+
+    if (!user.rows.length) {
+      return res.status(404).json({ ok:false });
+    }
+
+    const target = user.rows[0];
+
+    // ❌ нельзя удалить админа
+    if (target.role === "admin") {
+      return res.status(403).json({
+        ok:false,
+        error:"cannot_delete_admin"
+      });
+    }
+
+    // ❌ нельзя удалить себя
+    if (req.user.id === userId) {
+      return res.status(403).json({
+        ok:false,
+        error:"cannot_delete_self"
+      });
+    }
+
+    // удаляем пользователя
+    await pool.query(
+      `DELETE FROM users WHERE id = $1`,
+      [userId]
+    );
+
+    res.json({ ok:true });
+
+  } catch(e) {
+
+    console.error("DELETE USER ERROR:",e);
+
+    res.status(500).json({
+      ok:false
+    });
+
+  }
+});
+
+// ======================================================
 // PROMO STORAGE
 // ======================================================
 const DATA_PATH = path.join(process.cwd(), "data", "promo-codes.json");
