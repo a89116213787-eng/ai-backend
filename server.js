@@ -2969,7 +2969,6 @@ app.post("/api/admin/activate-month-subscription", authMiddleware, requireAdmin,
   }
 });
 
-
 // ======================================================
 // ADMIN — ADMIN SUBSCRIPTION (NO TOKEN LIMIT)
 // ======================================================
