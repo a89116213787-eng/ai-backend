@@ -596,31 +596,7 @@ app.get("/api/user/balance", authMiddleware, async (req, res) => {
 // ===============================
 app.get("/api/user/subscription", authMiddleware, async (req, res) => {
   try {
-
-    const user = await pool.query(
-      "SELECT role, admin_subscription FROM users WHERE id = $1",
-      [req.user.id]
-    );
-
-    if (!user.rows.length) {
-      return res.status(404).json({ ok:false });
-    }
-
-    const role = user.rows[0].role;
-    const adminSub = user.rows[0].admin_subscription;
-
-    // настоящий админ
-    if (role === "admin") {
-      return res.json({
-        ok: true,
-        active: true,
-        admin: true,
-        expires_at: null
-      });
-    }
-
-    // юзер с админ подпиской
-    if (adminSub === true) {
+    if (req.user.role === "admin") {
       return res.json({
         ok: true,
         active: true,
@@ -651,6 +627,14 @@ app.get("/api/user/subscription", authMiddleware, async (req, res) => {
     console.error("SUB STATUS ERROR:", e);
     res.status(500).json({ ok: false });
   }
+});
+
+app.get("/api/user/me", authMiddleware, async (req, res) => {
+  res.json({
+    ok: true,
+    email: req.user.email,
+    id: req.user.id
+  });
 });
 
 // ======================================================
