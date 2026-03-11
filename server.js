@@ -969,10 +969,17 @@ if(req.files){
       });
     }
 
+    const user = await pool.query(
+  "SELECT admin_subscription FROM users WHERE id = $1",
+  [userId]
+);
+
+const isAdmin = req.user.role === "admin" || user.rows[0]?.admin_subscription;
+
     // ===============================
     // 🔒 ПРОВЕРКА ПОДПИСКИ
     // ===============================
-    if (req.user.role !== "admin") {
+    if (!isAdmin) {
 
       const sub = await pool.query(
         "SELECT expires_at FROM subscriptions WHERE user_id = $1",
@@ -1536,10 +1543,17 @@ let spentCost = 0;
 } = req.body;
     const { id, role } = req.user;
 
+    const user = await pool.query(
+  "SELECT admin_subscription FROM users WHERE id = $1",
+  [id]
+);
+
+const isAdmin = role === "admin" || user.rows[0]?.admin_subscription;
+
 // ===============================
 // 🔒 проверка подписки
 // ===============================
-if (role !== "admin") {
+if (!isAdmin) {
 
   const sub = await pool.query(
     "SELECT expires_at FROM subscriptions WHERE user_id = $1",
@@ -2235,10 +2249,17 @@ app.post("/api/generate-video", authMiddleware, async (req, res) => {
 
     const { id, role } = req.user;
 
+    const user = await pool.query(
+  "SELECT admin_subscription FROM users WHERE id = $1",
+  [id]
+);
+
+const isAdmin = role === "admin" || user.rows[0]?.admin_subscription;
+
     // ===============================
     // 🔒 SUBSCRIPTION CHECK
     // ===============================
-    if (role !== "admin") {
+    if (!isAdmin) {
 
       const sub = await pool.query(
         "SELECT expires_at FROM subscriptions WHERE user_id = $1",
