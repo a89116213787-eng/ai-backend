@@ -1662,7 +1662,7 @@ if (modelName === "gemini-3-pro-image-preview") {
 // ======================================
 // 🔐 ПРОВЕРКА ПРАВ + АТОМАРНОЕ СПИСАНИЕ
 // ======================================
-if (role !== "admin") {
+if (!isAdmin) {
 
   const debit = await pool.query(
 `
@@ -2108,7 +2108,7 @@ return res.json({
     // ===============================
     // 🔄 TOKEN REFUND
     // ===============================
-  if (spentCost > 0 && req.user?.role !== "admin") {
+  if (spentCost > 0 && !isAdmin) {
 
     try {
 
@@ -2285,7 +2285,7 @@ const isAdmin = role === "admin" || user.rows[0]?.admin_subscription;
     if (model === "kwaivgi/kling-v3-omni-video") cost = 120;
     if (model === "kwaivgi/kling-v3-motion-control") cost = 120;
 
-    if (role !== "admin") {
+    if (!isAdmin) {
 
       const debit = await pool.query(
         `
