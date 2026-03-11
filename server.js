@@ -596,7 +596,13 @@ app.get("/api/user/balance", authMiddleware, async (req, res) => {
 // ===============================
 app.get("/api/user/subscription", authMiddleware, async (req, res) => {
   try {
-    if (req.user.role === "admin") {
+
+    const user = await pool.query(
+  "SELECT admin_subscription FROM users WHERE id = $1",
+  [req.user.id]
+);
+
+if (req.user.role === "admin" || user.rows[0]?.admin_subscription) {
       return res.json({
         ok: true,
         active: true,
