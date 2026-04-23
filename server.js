@@ -1229,15 +1229,28 @@ app.post("/api/user/upload-avatar", authMiddleware, upload.single("file"), async
 
     // 🔥 удаляем старый аватар
     if (oldAvatar) {
-       try {
+      try {
+
         const key = new URL(oldAvatar).pathname.slice(1);
 
-        await r2.send(
-           new DeleteObjectCommand({
+        const s3 = new S3Client({
+          region: "auto",
+          endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+          credentials: {
+            accessKeyId: process.env.R2_ACCESS_KEY,
+            secretAccessKey: process.env.R2_SECRET_KEY,
+          },
+        });
+
+        await s3.send(
+          new DeleteObjectCommand({
             Bucket: process.env.R2_BUCKET,
             Key: key,
           })
-         );
+        );
+
+        console.log("OLD AVATAR DELETED:", key);
+
       } catch (err) {
         console.error("DELETE OLD AVATAR ERROR:", err);
       }
