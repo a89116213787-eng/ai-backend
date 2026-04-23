@@ -636,11 +636,25 @@ if (req.user.role === "admin" || user.rows[0]?.admin_subscription) {
 });
 
 app.get("/api/user/me", authMiddleware, async (req, res) => {
-  res.json({
-    ok: true,
-    email: req.user.email,
-    id: req.user.id
-  });
+  try {
+    const result = await pool.query(
+      "SELECT id, email, avatar_url FROM users WHERE id = $1",
+      [req.user.id]
+    );
+
+    const user = result.rows[0];
+
+    res.json({
+      ok: true,
+      id: user.id,
+      email: user.email,
+      avatar_url: user.avatar_url
+    });
+
+  } catch (e) {
+    console.error("ME ERROR:", e);
+    res.status(500).json({ ok: false });
+  }
 });
 
 // ======================================================
