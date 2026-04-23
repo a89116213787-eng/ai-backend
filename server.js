@@ -1230,7 +1230,7 @@ app.post("/api/user/upload-avatar", authMiddleware, upload.single("file"), async
     // 🔥 удаляем старый аватар
     if (oldAvatar) {
        try {
-        const key = oldAvatar.split(".r2.dev/")[1];
+        const key = new URL(oldAvatar).pathname.slice(1);
 
         await r2.send(
            new DeleteObjectCommand({
