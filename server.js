@@ -1218,6 +1218,25 @@ app.post("/api/user/upload-avatar", authMiddleware, upload.single("file"), async
   }
 });
 
+app.post("/api/user/update-profile", authMiddleware, async (req, res) => {
+  try {
+    const { firstName, lastName } = req.body;
+
+    await pool.query(
+      `UPDATE users 
+       SET first_name = $1, last_name = $2 
+       WHERE id = $3`,
+      [firstName || "", lastName || "", req.user.id]
+    );
+
+    res.json({ ok: true });
+
+  } catch (e) {
+    console.error("UPDATE PROFILE ERROR:", e);
+    res.status(500).json({ ok: false });
+  }
+});
+
 // ======================================================
 // WORKSPACE SAVE
 // ======================================================
