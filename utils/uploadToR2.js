@@ -10,10 +10,10 @@ const s3 = new S3Client({
   },
 });
 
-export async function uploadToR2(buffer) {
+export async function uploadToR2(buffer, folder = "i") {
 
   const id = crypto.randomUUID();
-  const key = `i/${id}.webp`;
+  const key = `${folder}/${id}.webp`;
 
   await s3.send(
     new PutObjectCommand({

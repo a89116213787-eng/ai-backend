@@ -1203,17 +1203,46 @@ app.post("/api/user/upload-avatar", authMiddleware, upload.single("file"), async
   try {
     const file = req.file;
 
+    const userRes = await pool.query(
+      "SELECT avatar_url FROM users WHERE id = $1",
+      [req.user.id]
+    );
+
+    const oldAvatar = userRes.rows[0]?.avatar_url;
+
     if (!file) {
       return res.status(400).json({ ok: false, error: "no file" });
     }
 
-    // 🔥 конвертация в webp
+    // 🔥 конвертация + адаптивное сжатие
     const webp = await sharp(file.buffer)
+      .resize({
+        width: 1024,
+        height: 1024,
+        fit: "inside",              // сохраняет пропорции
+        withoutEnlargement: true    // не увеличивает маленькие
+      })
       .webp({ quality: 85 })
       .toBuffer();
 
+    // 🔥 удаляем старый аватар
+    if (oldAvatar) {
+       try {
+        const key = oldAvatar.split(".r2.dev/")[1];
+
+        await r2.send(
+           new DeleteObjectCommand({
+            Bucket: process.env.R2_BUCKET,
+            Key: key,
+          })
+         );
+      } catch (err) {
+        console.error("DELETE OLD AVATAR ERROR:", err);
+      }
+    }
+
     // 🔥 загрузка в R2
-    const url = await uploadToR2(webp);
+    const url = await uploadToR2(webp, "avatars");
 
     // 🔥 сохраняем в БД
     await pool.query(
