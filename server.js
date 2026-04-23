@@ -1182,6 +1182,42 @@ app.post("/api/upload-image", authMiddleware, async (req, res) => {
   }
 });
 
+// =========================
+// 🖼 ЗАГРУЗКА АВАТАРА R2
+// =========================
+app.post("/api/user/upload-avatar", authMiddleware, upload.single("file"), async (req, res) => {
+  try {
+    const file = req.file;
+
+    if (!file) {
+      return res.status(400).json({ ok: false, error: "no file" });
+    }
+
+    // 🔥 конвертация в webp
+    const webp = await sharp(file.buffer)
+      .webp({ quality: 85 })
+      .toBuffer();
+
+    // 🔥 загрузка в R2
+    const url = await uploadToR2(webp);
+
+    // 🔥 сохраняем в БД
+    await pool.query(
+      "UPDATE users SET avatar_url = $1 WHERE id = $2",
+      [url, req.user.id]
+    );
+
+    return res.json({
+      ok: true,
+      url,
+    });
+
+  } catch (e) {
+    console.error("UPLOAD AVATAR ERROR:", e);
+    res.status(500).json({ ok: false });
+  }
+});
+
 // ======================================================
 // WORKSPACE SAVE
 // ======================================================
