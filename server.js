@@ -638,7 +638,7 @@ if (req.user.role === "admin" || user.rows[0]?.admin_subscription) {
 app.get("/api/user/me", authMiddleware, async (req, res) => {
   try {
     const result = await pool.query(
-      "SELECT id, email, avatar_url, first_name, last_name FROM users WHERE id = $1"
+      "SELECT id, email, avatar_url, first_name, last_name FROM users WHERE id = $1",
       [req.user.id]
     );
 
