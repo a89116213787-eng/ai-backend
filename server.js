@@ -1361,11 +1361,29 @@ app.get("/api/user/generations", authMiddleware, async (req, res) => {
 
     const result = await pool.query(
       `
-      SELECT id, prompt, image_url, video_url, created_at
-      FROM generations
-      WHERE user_id = $1
+      SELECT *
+      FROM (
+        (
+          SELECT id, prompt, image_url, video_url, created_at
+          FROM generations
+          WHERE user_id = $1
+          AND image_url IS NOT NULL
+          ORDER BY created_at DESC
+          LIMIT 150
+       )
+
+        UNION ALL
+
+       (
+          SELECT id, prompt, image_url, video_url, created_at
+          FROM generations
+          WHERE user_id = $1
+          AND video_url IS NOT NULL
+          ORDER BY created_at DESC
+          LIMIT 50
+        )
+      ) t
       ORDER BY created_at DESC
-      LIMIT 50
       `,
       [userId]
     );
