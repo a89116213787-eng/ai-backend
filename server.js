@@ -1361,7 +1361,7 @@ app.get("/api/user/generations", authMiddleware, async (req, res) => {
 
     const result = await pool.query(
       `
-      SELECT id, prompt, image_url, created_at
+      SELECT id, prompt, image_url, video_url, created_at
       FROM generations
       WHERE user_id = $1
       ORDER BY created_at DESC
@@ -2560,22 +2560,41 @@ const s3 = new S3Client({
   }
 });
 
-      // загружаем в R2 как mp4
-      const key = `videos/${crypto.randomUUID()}.mp4`;
+// загружаем в R2 как mp4
+const key = `videos/${crypto.randomUUID()}.mp4`;
 
-      await s3.send(
-        new PutObjectCommand({
-          Bucket: process.env.R2_BUCKET,
-          Key: key,
-          Body: buffer,
-          ContentType: "video/mp4"
-        })
-      );
+await s3.send(
+  new PutObjectCommand({
+    Bucket: process.env.R2_BUCKET,
+    Key: key,
+    Body: buffer,
+    ContentType: "video/mp4"
+  })
+);
 
-      // получаем имя файла
+// получаем имя файла
 const videoKey = key.split("videos/")[1];
 
-// кэшируем
+// 🔥 получаем userId
+const userId = req.user.id;
+
+// 🔥 ВАЖНО: prompt надо передать
+const prompt = req.body.prompt || "video generation";
+
+// 🔥 сохраняем в БД
+await pool.query(
+  `
+  INSERT INTO generations (user_id, prompt, video_url)
+  VALUES ($1, $2, $3)
+  `,
+  [
+    userId,
+    prompt,
+    `https://ai-backend-bd2h.onrender.com/api/download-video/${videoKey}`
+  ]
+);
+
+// кэш
 videoCache.set(id, videoKey);
 
 return res.json({
@@ -2668,7 +2687,7 @@ async function cleanupOldGenerations() {
       DELETE FROM generations
       WHERE liked = false
       AND created_at < NOW() - interval '30 days'
-      RETURNING image_url
+      RETURNING image_url, video_url
     `);
 
     if (!result.rows.length) {
@@ -2687,18 +2706,32 @@ async function cleanupOldGenerations() {
 
     for (const row of result.rows) {
 
-      const key = row.image_url.split(".r2.dev/")[1];
+  const urls = [row.image_url, row.video_url].filter(Boolean);
 
-      await s3.send(
-        new DeleteObjectCommand({
-          Bucket: process.env.R2_BUCKET,
-          Key: key
-        })
-      );
+  for (const url of urls) {
 
+    let key;
+
+    if (url.includes("/api/download-video/")) {
+      key = "videos/" + url.split("/api/download-video/")[1];
+    } else {
+      const parts = url.split(".r2.dev/");
+      if (parts.length < 2) continue;
+      key = parts[1];
     }
 
-    console.log("🧹 deleted images:", result.rows.length);
+    await s3.send(
+      new DeleteObjectCommand({
+        Bucket: process.env.R2_BUCKET,
+        Key: key
+      })
+    );
+
+  }
+
+}
+
+console.log("🧹 deleted generations:", result.rows.length);
 
   } catch (err) {
     console.error("CLEANUP ERROR:", err);
@@ -2706,65 +2739,6 @@ async function cleanupOldGenerations() {
 }
 
 setInterval(cleanupOldGenerations, 24 * 60 * 60 * 1000);
-
-// ======================================
-// AUTO CLEANUP OLD VIDEOS (7 days)
-// ======================================
-
-async function cleanupOldVideos() {
-
-  try {
-
-    const s3 = new S3Client({
-      region: "auto",
-      endpoint: process.env.R2_ENDPOINT,
-      credentials: {
-        accessKeyId: process.env.R2_ACCESS_KEY,
-        secretAccessKey: process.env.R2_SECRET_KEY
-      }
-    });
-
-    const list = await s3.send(
-      new ListObjectsV2Command({
-        Bucket: process.env.R2_BUCKET,
-        Prefix: "videos/"
-      })
-    );
-
-    if (!list.Contents) return;
-
-    const now = Date.now();
-
-    for (const file of list.Contents) {
-
-      const age = now - new Date(file.LastModified).getTime();
-      const days = age / (1000 * 60 * 60 * 24);
-
-      if (days > 7) {
-
-        await s3.send(
-          new DeleteObjectCommand({
-            Bucket: process.env.R2_BUCKET,
-            Key: file.Key
-          })
-        );
-
-        console.log("🧹 deleted old video:", file.Key);
-
-      }
-
-    }
-
-  } catch (err) {
-
-    console.error("VIDEO CLEANUP ERROR:", err);
-
-  }
-
-}
-
-// запуск раз в день
-setInterval(cleanupOldVideos, 24 * 60 * 60 * 1000);
 
 // ==================
 // START SERVER
