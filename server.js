@@ -482,13 +482,24 @@ app.post("/api/auth/register", async (req, res) => {
     const role = email === "admin@local.dev" ? "admin" : "user";
 
     const result = await pool.query(
-      `INSERT INTO users (email, password_hash, role)
-       VALUES ($1, $2, $3)
+      `INSERT INTO users (email, password_hash, role, tokens, trial_used)
+       VALUES ($1, $2, $3, $4, $5)
        RETURNING id, email, role`,
-      [email, passwordHash, role]
+      [email, passwordHash, role, 50, true]
     );
 
     const user = result.rows[0];
+
+    // 🔥 ПРОБНЫЙ ПЕРИОД 7 ДНЕЙ
+    const now = new Date();
+    const expires = new Date(now);
+    expires.setDate(expires.getDate() + 7);
+
+    await pool.query(
+      `INSERT INTO subscriptions (user_id, expires_at)
+       VALUES ($1, $2)`,
+      [user.id, expires]
+    );
 
     const token = jwt.sign(
       {
