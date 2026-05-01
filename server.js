@@ -410,18 +410,35 @@ async function deleteUserWithCleanup(userId) {
     }
   }
 
-  await pool.query(`DELETE FROM generations WHERE user_id = $1`, [userId]);
-  await pool.query(`DELETE FROM assistant_messages WHERE user_id = $1`, [userId]);
-  await pool.query(`DELETE FROM subscriptions WHERE user_id = $1`, [userId]);
-  await pool.query(`DELETE FROM token_logs WHERE user_id = $1`, [userId]);
-  await pool.query(`DELETE FROM payments WHERE user_id = $1`, [userId]);
-  await pool.query(`DELETE FROM workspaces WHERE user_id = $1`, [userId]);
-  await pool.query(`DELETE FROM password_resets WHERE user_id = $1`, [userId]);
+  const client = await pool.connect();
 
-  await pool.query(
-    `DELETE FROM users WHERE id = $1`,
-    [userId]
-  );
+try {
+
+  await client.query("BEGIN");
+
+  await client.query(`DELETE FROM generations WHERE user_id = $1`, [userId]);
+  await client.query(`DELETE FROM assistant_messages WHERE user_id = $1`, [userId]);
+  await client.query(`DELETE FROM subscriptions WHERE user_id = $1`, [userId]);
+  await client.query(`DELETE FROM token_logs WHERE user_id = $1`, [userId]);
+  await client.query(`DELETE FROM payments WHERE user_id = $1`, [userId]);
+  await client.query(`DELETE FROM workspaces WHERE user_id = $1`, [userId]);
+  await client.query(`DELETE FROM password_resets WHERE user_id = $1`, [userId]);
+
+  await client.query(`DELETE FROM users WHERE id = $1`, [userId]);
+
+  await client.query("COMMIT");
+
+} catch (e) {
+
+  await client.query("ROLLBACK");
+  throw e;
+
+} finally {
+
+  client.release();
+
+}
+
 }
 
 // ======================================================
@@ -482,7 +499,7 @@ app.post("/api/admin/delete-user", authMiddleware, requireAdmin, async (req, res
     }
   });
 
-  // ======================================================
+// ======================================================
 // USER — DELETE SELF ACCOUNT
 // ======================================================
 
@@ -540,8 +557,15 @@ app.get("/", (req, res) => {
 
 // ---------- REGISTER ----------
 app.post("/api/auth/register", async (req, res) => {
+  const client = await pool.connect(); // 🔥 ВАЖНО
+
   try {
     const { email, password, captcha } = req.body;
+
+    // ===============================
+    // 🧹 NORMALIZE EMAIL
+    // ===============================
+    const emailNormalized = email?.trim().toLowerCase();
 
     // ===============================
     // CLOUDFLARE TURNSTILE CHECK
@@ -569,48 +593,82 @@ app.post("/api/auth/register", async (req, res) => {
       });
     }
 
-    if (!email || !password) {
+    if (!emailNormalized || !password) {
       return res.status(400).json({
         ok: false,
         error: "email and password required",
       });
     }
 
-    const exists = await pool.query(
+    // ===============================
+    // 🚀 НАЧИНАЕМ ТРАНЗАКЦИЮ
+    // ===============================
+    await client.query("BEGIN");
+
+    const exists = await client.query(
       "SELECT id FROM users WHERE email = $1",
-      [email]
+      [emailNormalized]
     );
 
     if (exists.rows.length > 0) {
+      await client.query("ROLLBACK");
       return res.status(400).json({
         ok: false,
         error: "user already exists",
       });
     }
 
+    // ===============================
+    // 🧠 ПРОВЕРКА TRIAL
+    // ===============================
+    const trialInsert = await client.query(
+      `
+      INSERT INTO used_trials (email)
+      VALUES ($1)
+      ON CONFLICT (email) DO NOTHING
+      RETURNING email
+      `,
+      [emailNormalized]
+    );
+
+    const hasUsedTrial = trialInsert.rowCount === 0;
+
     const passwordHash = await bcrypt.hash(password, 10);
 
-    const role = email === "admin@local.dev" ? "admin" : "user";
+    const role = emailNormalized === "admin@local.dev" ? "admin" : "user";
 
-    const result = await pool.query(
+    const tokens = hasUsedTrial ? 0 : 50;
+    const trialUsed = hasUsedTrial;
+
+    const result = await client.query(
       `INSERT INTO users (email, password_hash, role, tokens, trial_used)
        VALUES ($1, $2, $3, $4, $5)
        RETURNING id, email, role`,
-      [email, passwordHash, role, 50, true]
+      [emailNormalized, passwordHash, role, tokens, trialUsed]
     );
 
     const user = result.rows[0];
 
-    // 🔥 ПРОБНЫЙ ПЕРИОД 5 ДНЕЙ
-    const now = new Date();
-    const expires = new Date(now);
-    expires.setDate(expires.getDate() + 5);
+    // ===============================
+    // 🎁 TRIAL (если не использовал)
+    // ===============================
+    if (!hasUsedTrial) {
 
-    await pool.query(
-      `INSERT INTO subscriptions (user_id, expires_at)
-       VALUES ($1, $2)`,
-      [user.id, expires]
-    );
+      const now = new Date();
+      const expires = new Date(now);
+      expires.setDate(expires.getDate() + 5);
+
+      await client.query(
+        `INSERT INTO subscriptions (user_id, expires_at)
+         VALUES ($1, $2)`,
+        [user.id, expires]
+      );
+    }
+
+    // ===============================
+    // ✅ КОММИТ
+    // ===============================
+    await client.query("COMMIT");
 
     const token = jwt.sign(
       {
@@ -627,9 +685,25 @@ app.post("/api/auth/register", async (req, res) => {
       user,
       token,
     });
+
   } catch (e) {
+
+    // ===============================
+    // ❌ ROLLBACK ПРИ ЛЮБОЙ ОШИБКЕ
+    // ===============================
+    await client.query("ROLLBACK");
+
     console.error("REGISTER ERROR:", e);
+
     res.status(500).json({ ok: false, error: "register failed" });
+
+  } finally {
+
+    // ===============================
+    // 🔌 ОСВОБОЖДАЕМ СОЕДИНЕНИЕ
+    // ===============================
+    client.release();
+
   }
 });
 
