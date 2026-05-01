@@ -1890,7 +1890,7 @@ if (!isAdmin) {
   if (!sub.rows.length || new Date(sub.rows[0].expires_at) < new Date()) {
     return res.status(403).json({
       ok: false,
-      message: "Подписка закончилась. Купите тариф для продолжения."
+      message: "Подписка закончилась."
     });
   }
 }
@@ -2004,7 +2004,7 @@ RETURNING tokens
   if (debit.rowCount === 0) {
     return res.status(403).json({
       error: "no_tokens",
-      message: "Токены закончились. Купите тариф.",
+      message: "Токены закончились."
     });
   }
 
@@ -2596,7 +2596,7 @@ const isAdmin = role === "admin" || user.rows[0]?.admin_subscription;
       if (!sub.rows.length || new Date(sub.rows[0].expires_at) < new Date()) {
         return res.status(403).json({
           ok: false,
-          message: "Подписка закончилась"
+          message: "Подписка закончилась."
         });
       }
 
@@ -2627,7 +2627,8 @@ const isAdmin = role === "admin" || user.rows[0]?.admin_subscription;
       if (debit.rowCount === 0) {
 
         return res.status(403).json({
-          error: "no_tokens"
+          error: "no_tokens",
+          message: "Токены закончились."
         });
 
       }
