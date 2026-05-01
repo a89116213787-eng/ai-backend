@@ -349,7 +349,7 @@ app.post("/api/admin/delete-user", authMiddleware, requireAdmin, async (req, res
 
     // получаем пользователя
     const user = await pool.query(
-      `SELECT id, role FROM users WHERE id = $1`,
+      `SELECT id, role, avatar_url FROM users WHERE id = $1`,
       [userId]
     );
 
@@ -358,6 +358,7 @@ app.post("/api/admin/delete-user", authMiddleware, requireAdmin, async (req, res
     }
 
     const target = user.rows[0];
+    const avatar = target.avatar_url;
 
     // ❌ нельзя удалить админа
     if (target.role === "admin") {
@@ -375,11 +376,82 @@ app.post("/api/admin/delete-user", authMiddleware, requireAdmin, async (req, res
       });
     }
 
+  // ===============================
+// 🧹 CLEANUP R2 FILES BEFORE DELETE
+// ===============================
+
+// создаём R2 клиент (если нет выше)
+const s3 = new S3Client({
+  region: "auto",
+  endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+  credentials: {
+    accessKeyId: process.env.R2_ACCESS_KEY,
+    secretAccessKey: process.env.R2_SECRET_KEY,
+  },
+});
+
+// 1. достаём все генерации
+const files = await pool.query(
+  `SELECT image_url, video_url FROM generations WHERE user_id = $1`,
+  [userId]
+);
+
+// 2. удаляем изображения и видео
+for (const row of files.rows) {
+
+  const urls = [row.image_url, row.video_url].filter(Boolean);
+
+  for (const url of urls) {
+
+    try {
+
+      if (!url) continue;
+      
+      const parsed = new URL(url);
+
+      let key = parsed.pathname.startsWith("/")
+        ? parsed.pathname.slice(1)
+        : parsed.pathname;
+
+      await s3.send(new DeleteObjectCommand({
+        Bucket: process.env.R2_BUCKET,
+        Key: key
+      }));
+
+      console.log("🗑 deleted file:", key);
+
+    } catch (err) {
+      console.error("R2 delete error:", err);
+    }
+
+  }
+}
+
+// 3. удаляем аватар
+if (avatar) {
+  try {
+
+    const key = new URL(avatar).pathname.slice(1);
+
+    await s3.send(new DeleteObjectCommand({
+      Bucket: process.env.R2_BUCKET,
+      Key: key
+    }));
+
+    console.log("🗑 avatar deleted:", key);
+
+  } catch (err) {
+    console.error("AVATAR DELETE ERROR:", err);
+  }
+}
+
     // удаляем пользователя
     await pool.query(
       `DELETE FROM users WHERE id = $1`,
       [userId]
     );
+
+    console.log(`🧹 user ${userId} deleted with cleanup`);
 
     res.json({ ok:true });
 
@@ -490,10 +562,10 @@ app.post("/api/auth/register", async (req, res) => {
 
     const user = result.rows[0];
 
-    // 🔥 ПРОБНЫЙ ПЕРИОД 7 ДНЕЙ
+    // 🔥 ПРОБНЫЙ ПЕРИОД 5 ДНЕЙ
     const now = new Date();
     const expires = new Date(now);
-    expires.setDate(expires.getDate() + 7);
+    expires.setDate(expires.getDate() + 5);
 
     await pool.query(
       `INSERT INTO subscriptions (user_id, expires_at)
