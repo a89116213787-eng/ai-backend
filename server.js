@@ -1890,7 +1890,7 @@ if (!isAdmin) {
   if (!sub.rows.length || new Date(sub.rows[0].expires_at) < new Date()) {
     return res.status(403).json({
       ok: false,
-      message: "Подписка закончилась."
+      message: "Подписка закончилась"
     });
   }
 }
@@ -2004,7 +2004,7 @@ RETURNING tokens
   if (debit.rowCount === 0) {
     return res.status(403).json({
       error: "no_tokens",
-      message: "Токены закончились."
+      message: "Токены закончились"
     });
   }
 
@@ -2358,7 +2358,7 @@ response = await ai.models.generateContent({
 
   return res.status(502).json({
     error: "model_no_image",
-    message: "Model returned no image. Please retry."
+    message: "Модель на обновлении. Попробуйте позже"
   });
 }
 
@@ -2465,9 +2465,9 @@ return res.json({
   }
 
   res.status(500).json({
-    error: "generation failed",
-    message: err?.message || "unknown error",
-  });
+  error: "generation_failed",
+  message: "Модель на обновлении. Попробуйте позже"
+});
 
  }
 });
@@ -2596,7 +2596,7 @@ const isAdmin = role === "admin" || user.rows[0]?.admin_subscription;
       if (!sub.rows.length || new Date(sub.rows[0].expires_at) < new Date()) {
         return res.status(403).json({
           ok: false,
-          message: "Подписка закончилась."
+          message: "Подписка закончилась"
         });
       }
 
@@ -2628,7 +2628,7 @@ const isAdmin = role === "admin" || user.rows[0]?.admin_subscription;
 
         return res.status(403).json({
           error: "no_tokens",
-          message: "Токены закончились."
+          message: "Токены закончились"
         });
 
       }
@@ -2709,9 +2709,10 @@ return res.json({
     }
 
     res.status(500).json({
-      ok: false,
-      error: "video_generation_failed"
-    });
+     ok: false,
+     error: "generation_failed",
+     message: "Модель на обновлении. Попробуйте позже"
+   });
 
   }
 
