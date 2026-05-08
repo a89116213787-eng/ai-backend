@@ -830,8 +830,145 @@ app.post("/api/auth/register", async (req, res) => {
       }
     });
 
-// ---------- LOGIN ----------
-app.post("/api/auth/login", async (req, res) => {
+    // ======================================================
+    // RESEND VERIFY EMAIL
+    // ======================================================
+    app.post("/api/auth/resend-verification", async (req, res) => {
+      try {
+
+        const { email } = req.body;
+
+        const emailNormalized = email?.trim().toLowerCase();
+
+        if (!emailNormalized) {
+          return res.status(400).json({
+            ok: false,
+            error: "email required"
+          });
+        }
+
+        const result = await pool.query(
+          `
+          SELECT
+          id,
+          email_verified,
+          email_verify_expires
+          FROM users
+          WHERE email = $1
+          `,
+          [emailNormalized]
+        );
+
+        // всегда одинаковый ответ
+        if (!result.rows.length) {
+          return res.json({
+            ok: true
+          });
+        }
+
+        const user = result.rows[0];
+
+        // уже подтвержден
+        if (user.email_verified) {
+          return res.json({
+            ok: true
+          });
+        }
+
+    // ===============================
+    // RESEND LIMIT (2 HOURS)
+    // ===============================
+    const nextAllowedResend =
+      new Date(user.email_verify_expires).getTime()
+      - (22 * 60 * 60 * 1000);
+
+    if (Date.now() < nextAllowedResend) {
+
+      const minutes = Math.ceil(
+        (nextAllowedResend - Date.now()) / 60000
+      );
+
+      return res.status(429).json({
+        ok: false,
+        error: "resend_cooldown",
+        minutes
+      });
+
+    }
+
+        // новый токен
+        const verifyToken = crypto.randomBytes(32).toString("hex");
+
+        const verifyExpires = new Date(
+          Date.now() + 24 * 60 * 60 * 1000
+        );
+
+        await pool.query(
+          `
+          UPDATE users
+          SET
+            email_verify_token = $1,
+            email_verify_expires = $2
+          WHERE id = $3
+          `,
+          [
+            verifyToken,
+            verifyExpires,
+            user.id
+          ]
+        );
+
+        // отправка письма
+        await sendMail({
+          to: emailNormalized,
+          subject: "Подтверждение почты — ДизАiн",
+          html: `
+            <div style="font-family:Arial;padding:20px;">
+              <h2>Подтверждение почты</h2>
+
+              <p>
+                Нажмите кнопку ниже чтобы подтвердить email:
+              </p>
+
+              <a
+                href="https://dizain.pro/api/auth/verify-email?token=${verifyToken}"
+                style="
+                  display:inline-block;
+                  padding:12px 22px;
+                  background:#0ea5e9;
+                  color:white;
+                  text-decoration:none;
+                  border-radius:10px;
+                  font-weight:bold;
+                "
+              >
+                Подтвердить почту
+              </a>
+
+              <p style="margin-top:20px;color:#777;">
+                Ссылка действует 24 часа.
+              </p>
+            </div>
+          `
+        });
+
+        return res.json({
+          ok: true
+        });
+
+      } catch (e) {
+
+        console.error("RESEND VERIFY ERROR:", e);
+
+        return res.status(500).json({
+          ok: false
+        });
+
+      }
+    });
+
+  // ---------- LOGIN ----------
+  app.post("/api/auth/login", async (req, res) => {
   try {
     const { email, password } = req.body;
     const emailNormalized = email.trim().toLowerCase();
@@ -3098,6 +3235,56 @@ console.log("🧹 deleted generations:", result.rows.length);
 }
 
 setInterval(cleanupOldGenerations, 24 * 60 * 60 * 1000);
+
+// ======================================
+// AUTO DELETE UNVERIFIED USERS (24h)
+// ======================================
+
+async function cleanupUnverifiedUsers() {
+
+  try {
+
+    const result = await pool.query(`
+      SELECT id
+      FROM users
+      WHERE
+        email_verified = false
+        AND created_at < NOW() - interval '24 hours'
+    `);
+
+    if (!result.rows.length) {
+      console.log("🧹 no unverified users to delete");
+      return;
+    }
+
+    for (const row of result.rows) {
+
+      try {
+
+        await deleteUserWithCleanup(row.id);
+
+        console.log("🧹 deleted unverified user:", row.id);
+
+      } catch (e) {
+
+        console.error("DELETE UNVERIFIED USER ERROR:", e);
+
+      }
+
+    }
+
+  } catch (e) {
+
+    console.error("UNVERIFIED CLEANUP ERROR:", e);
+
+  }
+
+}
+
+setInterval(
+  cleanupUnverifiedUsers,
+  60 * 60 * 1000 // раз в час
+);
 
 // ==================
 // START SERVER
