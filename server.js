@@ -640,11 +640,40 @@ app.post("/api/auth/register", async (req, res) => {
     const tokens = hasUsedTrial ? 0 : 50;
     const trialUsed = hasUsedTrial;
 
+    // ===============================
+    // EMAIL VERIFY TOKEN
+    // ===============================
+    const verifyToken = crypto.randomBytes(32).toString("hex");
+
+    const verifyExpires = new Date(
+      Date.now() + 24 * 60 * 60 * 1000 // 24 часа
+    );
+
     const result = await client.query(
-      `INSERT INTO users (email, password_hash, role, tokens, trial_used)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING id, email, role`,
-      [emailNormalized, passwordHash, role, tokens, trialUsed]
+      `
+      INSERT INTO users (
+        email,
+        password_hash,
+        role,
+        tokens,
+        trial_used,
+        email_verified,
+        email_verify_token,
+        email_verify_expires
+      )
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+      RETURNING id, email, role
+      `,
+      [
+        emailNormalized,
+        passwordHash,
+        role,
+        tokens,
+        trialUsed,
+        false,
+        verifyToken,
+        verifyExpires
+      ]
     );
 
     const user = result.rows[0];
@@ -680,6 +709,43 @@ app.post("/api/auth/register", async (req, res) => {
       { expiresIn: "7d" }
     );
 
+    // ===============================
+    // 📧 SEND VERIFY EMAIL
+    // ===============================
+    await sendMail({
+      to: emailNormalized,
+      subject: "Подтверждение почты — ДизАiн",
+      html: `
+        <div style="font-family:Arial;padding:20px;">
+          <h2>Подтверждение почты</h2>
+
+          <p>
+            Нажмите кнопку ниже чтобы подтвердить email:
+          </p>
+
+          <a
+            href="https://dizain.pro/verify-email?token=${verifyToken}"
+            style="
+              display:inline-block;
+              padding:12px 22px;
+              background:#0ea5e9;
+              color:white;
+              text-decoration:none;
+              border-radius:10px;
+              font-weight:bold;
+            "
+          >
+            Подтвердить почту
+          </a>
+
+          <p style="margin-top:20px;color:#777;">
+            Ссылка действует 24 часа.
+          </p>
+        </div>
+      `
+    });
+
+
     return res.json({
       ok: true,
       user,
@@ -707,10 +773,68 @@ app.post("/api/auth/register", async (req, res) => {
   }
 });
 
+    // ======================================================
+    // EMAIL VERIFY
+    // ======================================================
+    app.get("/api/auth/verify-email", async (req, res) => {
+      try {
+
+        const { token } = req.query;
+
+        if (!token) {
+          return res.status(400).send("Invalid token");
+        }
+
+        const result = await pool.query(
+          `
+          SELECT id, email_verify_expires
+          FROM users
+          WHERE email_verify_token = $1
+          `,
+          [token]
+        );
+
+         if (!result.rows.length) {
+         return res.status(400).send("Invalid token");
+        }
+
+        const user = result.rows[0];
+
+        if (
+          !user.email_verify_expires ||
+          new Date(user.email_verify_expires) < new Date()
+        ) {
+          return res.status(400).send("Token expired");
+        }
+
+        await pool.query(
+          `
+          UPDATE users
+          SET
+            email_verified = true,
+            email_verify_token = NULL,
+            email_verify_expires = NULL
+          WHERE id = $1
+          `,
+          [user.id]
+        );
+
+       return res.redirect("https://dizain.pro/auth/login?verified=1");
+
+      } catch (e) {
+
+        console.error("VERIFY EMAIL ERROR:", e);
+
+        return res.status(500).send("Verification failed");
+
+      }
+    });
+
 // ---------- LOGIN ----------
 app.post("/api/auth/login", async (req, res) => {
   try {
     const { email, password } = req.body;
+    const emailNormalized = email.trim().toLowerCase();
 
     if (!email || !password) {
       return res.status(400).json({
@@ -720,8 +844,17 @@ app.post("/api/auth/login", async (req, res) => {
     }
 
     const result = await pool.query(
-      "SELECT id, email, password_hash, role FROM users WHERE email = $1",
-      [email]
+      `
+      SELECT
+        id,
+        email,
+        password_hash,
+        role,
+        email_verified
+      FROM users
+      WHERE email = $1
+      `,
+      [emailNormalized]
     );
 
     if (result.rows.length === 0) {
@@ -738,6 +871,16 @@ app.post("/api/auth/login", async (req, res) => {
       return res.status(401).json({
         ok: false,
         error: "invalid credentials",
+      });
+    }
+
+    // ===============================
+    // EMAIL NOT VERIFIED
+    // ===============================
+    if (!user.email_verified) {
+      return res.status(403).json({
+        ok: false,
+        error: "email_not_verified"
       });
     }
 
