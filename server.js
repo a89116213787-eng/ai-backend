@@ -724,7 +724,7 @@ app.post("/api/auth/register", async (req, res) => {
           </p>
 
           <a
-            href="https://dizain.pro/api/auth/verify-email?token=${verifyToken}"
+            href="https://ai-backend-bd2h.onrender.com/api/auth/verify-email?token=${verifyToken}"
             style="
               display:inline-block;
               padding:12px 22px;
