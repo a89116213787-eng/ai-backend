@@ -9,6 +9,7 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import { sendMail } from "./src/services/mailClient.js";
+import { verifyEmailTemplate } from "./src/templates/emails/verifyEmailTemplate.js";
 import { uploadToR2 } from "./utils/uploadToR2.js";
 import sharp from "sharp";
 import Replicate from "replicate";
@@ -712,38 +713,14 @@ app.post("/api/auth/register", async (req, res) => {
     // ===============================
     // 📧 SEND VERIFY EMAIL
     // ===============================
-    await sendMail({
-      to: emailNormalized,
-      subject: "Подтверждение почты — ДизАiн",
-      html: `
-        <div style="font-family:Arial;padding:20px;">
-          <h2>Подтверждение почты</h2>
-
-          <p>
-            Нажмите кнопку ниже чтобы подтвердить email:
-          </p>
-
-          <a
-            href="https://dizain.pro/api/auth/verify-email?token=${verifyToken}"
-            style="
-              display:inline-block;
-              padding:12px 22px;
-              background:#0ea5e9;
-              color:white;
-              text-decoration:none;
-              border-radius:10px;
-              font-weight:bold;
-            "
-          >
-            Подтвердить почту
-          </a>
-
-          <p style="margin-top:20px;color:#777;">
-            Ссылка действует 24 часа.
-          </p>
-        </div>
-      `
-    });
+      await sendMail({
+          to: emailNormalized,
+          subject: "Подтверждение почты — ДизАiн",
+          html: verifyEmailTemplate(
+            `https://dizain.pro/api/auth/verify-email?token=${verifyToken}`,
+            emailNormalized
+          )
+        });
 
 
     return res.json({
@@ -924,34 +901,10 @@ app.post("/api/auth/register", async (req, res) => {
         await sendMail({
           to: emailNormalized,
           subject: "Подтверждение почты — ДизАiн",
-          html: `
-            <div style="font-family:Arial;padding:20px;">
-              <h2>Подтверждение почты</h2>
-
-              <p>
-                Нажмите кнопку ниже чтобы подтвердить email:
-              </p>
-
-              <a
-                href="https://dizain.pro/api/auth/verify-email?token=${verifyToken}"
-                style="
-                  display:inline-block;
-                  padding:12px 22px;
-                  background:#0ea5e9;
-                  color:white;
-                  text-decoration:none;
-                  border-radius:10px;
-                  font-weight:bold;
-                "
-              >
-                Подтвердить почту
-              </a>
-
-              <p style="margin-top:20px;color:#777;">
-                Ссылка действует 24 часа.
-              </p>
-            </div>
-          `
+          html: verifyEmailTemplate(
+            `https://dizain.pro/api/auth/verify-email?token=${verifyToken}`,
+            emailNormalized
+          )
         });
 
         return res.json({
@@ -3274,35 +3227,11 @@ async function sendVerificationReminders() {
 
         await sendMail({
           to: user.email,
-          subject: "Подтверждение почты — ДизАiн",
-          html: `
-            <div style="font-family:Arial;padding:20px;">
-              <h2>Подтверждение почты</h2>
-
-              <p>
-                Нажмите кнопку ниже чтобы подтвердить email:
-              </p>
-
-              <a
-                href="https://dizain.pro/api/auth/verify-email?token=${user.email_verify_token}"
-                style="
-                  display:inline-block;
-                  padding:12px 22px;
-                  background:#0ea5e9;
-                  color:white;
-                  text-decoration:none;
-                  border-radius:10px;
-                  font-weight:bold;
-                "
-              >
-                Подтвердить почту
-              </a>
-
-              <p style="margin-top:20px;color:#777;">
-                Ссылка действует 24 часа.
-              </p>
-            </div>
-          `
+         subject: "Подтверждение почты — ДизАiн",
+          html: verifyEmailTemplate(
+          `https://dizain.pro/api/auth/verify-email?token=${user.email_verify_token}`,
+          user.email
+        )
         });
 
         await pool.query(
@@ -3329,34 +3258,10 @@ async function sendVerificationReminders() {
         await sendMail({
           to: user.email,
           subject: "Подтверждение почты — ДизАiн",
-          html: `
-            <div style="font-family:Arial;padding:20px;">
-              <h2>Подтверждение почты</h2>
-
-              <p>
-                Нажмите кнопку ниже чтобы подтвердить email:
-              </p>
-
-              <a
-                href="https://dizain.pro/api/auth/verify-email?token=${user.email_verify_token}"
-                style="
-                  display:inline-block;
-                  padding:12px 22px;
-                  background:#0ea5e9;
-                  color:white;
-                  text-decoration:none;
-                  border-radius:10px;
-                  font-weight:bold;
-                "
-              >
-                Подтвердить почту
-              </a>
-
-              <p style="margin-top:20px;color:#777;">
-                Ссылка действует 24 часа.
-              </p>
-            </div>
-          `
+          html: verifyEmailTemplate(
+          `https://dizain.pro/api/auth/verify-email?token=${user.email_verify_token}`,
+          user.email
+        )
         });
 
         await pool.query(
