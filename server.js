@@ -813,7 +813,8 @@ app.post("/api/auth/register", async (req, res) => {
           SET
             email_verified = true,
             email_verify_token = NULL,
-            email_verify_expires = NULL
+            email_verify_expires = NULL,
+            verification_reminders_sent = 0
           WHERE id = $1
           `,
           [user.id]
@@ -908,7 +909,8 @@ app.post("/api/auth/register", async (req, res) => {
           UPDATE users
           SET
             email_verify_token = $1,
-            email_verify_expires = $2
+            email_verify_expires = $2,
+            verification_reminders_sent = 0
           WHERE id = $3
           `,
           [
@@ -3237,6 +3239,150 @@ console.log("🧹 deleted generations:", result.rows.length);
 setInterval(cleanupOldGenerations, 24 * 60 * 60 * 1000);
 
 // ======================================
+// AUTO VERIFY EMAIL REMINDERS
+// ======================================
+
+async function sendVerificationReminders() {
+
+  try {
+
+    const result = await pool.query(`
+      SELECT
+        id,
+        email,
+        email_verify_token,
+        verification_reminders_sent,
+        created_at
+      FROM users
+      WHERE email_verified = false
+    `);
+
+    for (const user of result.rows) {
+
+      const createdAt = new Date(user.created_at).getTime();
+
+      const hoursPassed =
+        (Date.now() - createdAt) / (1000 * 60 * 60);
+
+      // ===============================
+      // reminder #1 after 6h
+      // ===============================
+      if (
+        user.verification_reminders_sent === 0 &&
+        hoursPassed >= 6
+      ) {
+
+        await sendMail({
+          to: user.email,
+          subject: "Подтверждение почты — ДизАiн",
+          html: `
+            <div style="font-family:Arial;padding:20px;">
+              <h2>Подтверждение почты</h2>
+
+              <p>
+                Нажмите кнопку ниже чтобы подтвердить email:
+              </p>
+
+              <a
+                href="https://dizain.pro/api/auth/verify-email?token=${user.email_verify_token}"
+                style="
+                  display:inline-block;
+                  padding:12px 22px;
+                  background:#0ea5e9;
+                  color:white;
+                  text-decoration:none;
+                  border-radius:10px;
+                  font-weight:bold;
+                "
+              >
+                Подтвердить почту
+              </a>
+
+              <p style="margin-top:20px;color:#777;">
+                Ссылка действует 24 часа.
+              </p>
+            </div>
+          `
+        });
+
+        await pool.query(
+          `
+          UPDATE users
+          SET verification_reminders_sent = 1
+          WHERE id = $1
+          `,
+          [user.id]
+        );
+
+        console.log("📧 reminder #1:", user.email);
+
+      }
+
+      // ===============================
+      // reminder #2 after 18h
+      // ===============================
+      else if (
+        user.verification_reminders_sent === 1 &&
+        hoursPassed >= 18
+      ) {
+
+        await sendMail({
+          to: user.email,
+          subject: "Подтверждение почты — ДизАiн",
+          html: `
+            <div style="font-family:Arial;padding:20px;">
+              <h2>Подтверждение почты</h2>
+
+              <p>
+                Нажмите кнопку ниже чтобы подтвердить email:
+              </p>
+
+              <a
+                href="https://dizain.pro/api/auth/verify-email?token=${user.email_verify_token}"
+                style="
+                  display:inline-block;
+                  padding:12px 22px;
+                  background:#0ea5e9;
+                  color:white;
+                  text-decoration:none;
+                  border-radius:10px;
+                  font-weight:bold;
+                "
+              >
+                Подтвердить почту
+              </a>
+
+              <p style="margin-top:20px;color:#777;">
+                Ссылка действует 24 часа.
+              </p>
+            </div>
+          `
+        });
+
+        await pool.query(
+          `
+          UPDATE users
+          SET verification_reminders_sent = 2
+          WHERE id = $1
+          `,
+          [user.id]
+        );
+
+        console.log("📧 reminder #2:", user.email);
+
+      }
+
+    }
+
+  } catch (e) {
+
+    console.error("VERIFY REMINDER ERROR:", e);
+
+  }
+
+}
+
+// ======================================
 // AUTO DELETE UNVERIFIED USERS (24h)
 // ======================================
 
@@ -3284,6 +3430,11 @@ async function cleanupUnverifiedUsers() {
 setInterval(
   cleanupUnverifiedUsers,
   60 * 60 * 1000 // раз в час
+);
+
+setInterval(
+  sendVerificationReminders,
+  60 * 60 * 1000
 );
 
 // ==================
