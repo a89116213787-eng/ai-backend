@@ -3351,9 +3351,25 @@ app.listen(PORT, () => {
 
 app.get("/api/debug/users", authMiddleware, requireAdmin, async (req, res) => {
   try {
-    const result = await pool.query(
-      "SELECT id, email, role, tokens FROM users ORDER BY id"
-    );
+
+    const result = await pool.query(`
+      SELECT
+        u.id,
+        u.email,
+        u.role,
+        u.tokens,
+        u.email_verified,
+        u.created_at,
+
+        (
+          SELECT COUNT(*)
+          FROM generations g
+          WHERE g.user_id = u.id
+        ) AS generations_count
+
+      FROM users u
+      ORDER BY u.created_at DESC
+    `);
 
     res.json({
       ok: true,
