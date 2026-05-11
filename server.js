@@ -772,8 +772,50 @@ app.post("/api/auth/register", async (req, res) => {
         );
 
          if (!result.rows.length) {
-         return res.status(400).send("Invalid token");
-        }
+           return res.status(400).send(`
+             <html>
+               <body style="
+                 background:#000;
+                 color:white;
+                 display:flex;
+                 align-items:center;
+                 justify-content:center;
+                 height:100vh;
+                 font-family:Gothic,sans-serif;
+                 margin:0;
+               ">
+                 <div style="
+                   text-align:center;
+                   background:rgba(255,255,255,0.04);
+                   border:1px solid rgba(255,255,255,0.05);
+                   padding:40px;
+                   border-radius:24px;
+                 ">
+                   <h2>Ссылка недействительна</h2>
+                   <p style="color:#aaa">
+                     Срок подтверждения истёк.<br/>
+                     Зарегистрируйтесь снова.
+                   </p>
+
+                   <a
+                    href="https://dizain.pro/auth/register"
+                     style="
+                       display:inline-block;
+                       margin-top:20px;
+                       padding:12px 24px;
+                       background:white;
+                       color:black;
+                       border-radius:9999px;
+                       text-decoration:none;
+                     "
+                   >
+                     Регистрация
+                   </a>
+                 </div>
+               </body>
+             </html>
+           `);
+         }
 
         const user = result.rows[0];
 
@@ -781,8 +823,50 @@ app.post("/api/auth/register", async (req, res) => {
           !user.email_verify_expires ||
           new Date(user.email_verify_expires) < new Date()
         ) {
-          return res.status(400).send("Token expired");
-        }
+           return res.status(400).send(`
+             <html>
+               <body style="
+                 background:#000;
+                 color:white;
+                 display:flex;
+                 align-items:center;
+                 justify-content:center;
+                 height:100vh;
+                 font-family:Gothic,sans-serif;
+                 margin:0;
+               ">
+                 <div style="
+                   text-align:center;
+                   background:rgba(255,255,255,0.04);
+                   border:1px solid rgba(255,255,255,0.05);
+                   padding:40px;
+                   border-radius:24px;
+                 ">
+                   <h2>Ссылка недействительна</h2>
+                   <p style="color:#aaa">
+                     Срок подтверждения истёк.<br/>
+                     Зарегистрируйтесь снова.
+                   </p>
+
+                   <a
+                    href="https://dizain.pro/auth/register"
+                     style="
+                       display:inline-block;
+                       margin-top:20px;
+                       padding:12px 24px;
+                       background:white;
+                       color:black;
+                       border-radius:9999px;
+                       text-decoration:none;
+                     "
+                   >
+                     Регистрация
+                   </a>
+                 </div>
+               </body>
+             </html>
+           `);
+         }
 
         await pool.query(
           `
