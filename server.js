@@ -774,41 +774,61 @@ app.post("/api/auth/register", async (req, res) => {
          if (!result.rows.length) {
            return res.status(400).send(`
              <html>
-               <body style="
+                <body style="
+                 min-height:100vh;
                  background:#000;
-                 color:white;
                  display:flex;
                  align-items:center;
                  justify-content:center;
-                 height:100vh;
+                 padding:2rem;
+                 color:white;
                  font-family:Gothic,sans-serif;
                  margin:0;
                ">
                  <div style="
+                   width:100%;
+                   max-width:420px;
                    text-align:center;
                    background:rgba(255,255,255,0.04);
                    border:1px solid rgba(255,255,255,0.05);
-                   padding:40px;
                    border-radius:24px;
-                 ">
-                   <h2>Ссылка недействительна</h2>
-                   <p style="color:#aaa">
+                   padding:3rem 2rem;
+                   backdrop-filter:blur(25px);
+                   box-shadow:0 10px 40px rgba(0,0,0,0.6);
+                  ">
+                   <h2 style="
+                     font-size:1.45rem;
+                     font-weight:500;
+                     margin-bottom:0.4rem;
+                   ">
+                     Ссылка недействительна
+                   </h2>
+                   <p style="
+                     font-size:0.95rem;
+                     color:#aaa;
+                     line-height:1.5;
+                     margin-bottom:2rem;
+                   ">
                      Срок подтверждения истёк.<br/>
                      Зарегистрируйтесь снова.
                    </p>
 
                    <a
-                    href="https://dizain.pro/auth/register"
-                     style="
-                       display:inline-block;
-                       margin-top:20px;
-                       padding:12px 24px;
-                       background:white;
-                       color:black;
-                       border-radius:9999px;
-                       text-decoration:none;
-                     "
-                   >
+                     href="https://dizain.pro/auth/register"
+                      style="
+                        display:inline-block;
+                        width:100%;
+                        padding:0.95rem 1rem;
+                        border-radius:9999px;
+                        background:white;
+                        border:none;
+                        color:black;
+                        font-weight:400;
+                        text-decoration:none;
+                        box-sizing:border-box;
+                        text-align:center;
+                      "
+                     >
                      Регистрация
                    </a>
                  </div>
@@ -824,42 +844,62 @@ app.post("/api/auth/register", async (req, res) => {
           new Date(user.email_verify_expires) < new Date()
         ) {
            return res.status(400).send(`
-             <html>
-               <body style="
+              <html>
+                <body style="
+                 min-height:100vh;
                  background:#000;
-                 color:white;
                  display:flex;
                  align-items:center;
                  justify-content:center;
-                 height:100vh;
+                 padding:2rem;
+                 color:white;
                  font-family:Gothic,sans-serif;
                  margin:0;
                ">
                  <div style="
+                   width:100%;
+                   max-width:420px;
                    text-align:center;
                    background:rgba(255,255,255,0.04);
                    border:1px solid rgba(255,255,255,0.05);
-                   padding:40px;
                    border-radius:24px;
-                 ">
-                   <h2>Ссылка недействительна</h2>
-                   <p style="color:#aaa">
+                   padding:3rem 2rem;
+                   backdrop-filter:blur(25px);
+                   box-shadow:0 10px 40px rgba(0,0,0,0.6);
+                  ">
+                   <h2 style="
+                     font-size:1.45rem;
+                     font-weight:500;
+                     margin-bottom:0.4rem;
+                   ">
+                     Ссылка недействительна
+                   </h2>
+                   <p style="
+                     font-size:0.95rem;
+                     color:#aaa;
+                     line-height:1.5;
+                     margin-bottom:2rem;
+                   ">
                      Срок подтверждения истёк.<br/>
                      Зарегистрируйтесь снова.
                    </p>
 
                    <a
-                    href="https://dizain.pro/auth/register"
-                     style="
-                       display:inline-block;
-                       margin-top:20px;
-                       padding:12px 24px;
-                       background:white;
-                       color:black;
-                       border-radius:9999px;
-                       text-decoration:none;
-                     "
-                   >
+                     href="https://dizain.pro/auth/register"
+                      style="
+                        display:inline-block;
+                        width:100%;
+                        padding:0.95rem 1rem;
+                        border-radius:9999px;
+                        background:white;
+                        border:none;
+                        color:black;
+                        font-weight:400;
+                        text-decoration:none;
+                        box-sizing:border-box;
+                        text-align:center;
+                      "
+                     >
                      Регистрация
                    </a>
                  </div>
