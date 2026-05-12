@@ -5,18 +5,30 @@ export function verifyEmailTemplate(link, email) {
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  </head>
+
+  <style>
+  @font-face {
+    font-family: "Gothic";
+    src: url("https://dizain.pro/fonts/GOTHIC.TTF") format("truetype");
+  }
+
+  .gothic {
+    font-family: "Gothic", Arial, sans-serif !important;
+  }
+ </style>
+ </head>
 
   <body
     style="
       margin:0;
       padding:0;
       background:#f5f5f5;
-      font-family:Arial, sans-serif;
+      font-family:'Gothic', Arial, sans-serif;
     "
   >
 
     <table
+    class="gothic"
       width="100%"
       cellpadding="0"
       cellspacing="0"
