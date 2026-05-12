@@ -823,8 +823,8 @@ app.post("/api/auth/register", async (req, res) => {
                      line-height:1.5;
                      margin-bottom:2rem;
                    ">
-                     Срок подтверждения истёк.<br/>
-                     Зарегистрируйтесь снова.
+                     Срок подтверждения истёк<br/>
+                     Зарегистрируйтесь снова
                    </p>
 
                    <a
@@ -908,8 +908,8 @@ app.post("/api/auth/register", async (req, res) => {
                      line-height:1.5;
                      margin-bottom:2rem;
                    ">
-                     Срок подтверждения истёк.<br/>
-                     Зарегистрируйтесь снова.
+                     Срок подтверждения истёк<br/>
+                     Зарегистрируйтесь снова
                    </p>
 
                    <a
