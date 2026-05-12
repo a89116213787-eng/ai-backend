@@ -774,6 +774,19 @@ app.post("/api/auth/register", async (req, res) => {
          if (!result.rows.length) {
            return res.status(400).send(`
              <html>
+               <head>
+                 <style>
+                   @font-face {
+                     font-family: "Gothic";
+                     src: url("https://dizain.pro/fonts/GOTHIC.TTF") format("truetype");
+                   }
+
+                   body {
+                     font-family: "Gothic", sans-serif;
+                     -webkit-font-smoothing: antialiased;
+                   }
+                 </style>
+               </head>
                 <body style="
                  min-height:100vh;
                  background:#000;
@@ -788,6 +801,7 @@ app.post("/api/auth/register", async (req, res) => {
                  <div style="
                    width:100%;
                    max-width:420px;
+                   box-sizing:border-box;
                    text-align:center;
                    background:rgba(255,255,255,0.04);
                    border:1px solid rgba(255,255,255,0.05);
@@ -845,6 +859,19 @@ app.post("/api/auth/register", async (req, res) => {
         ) {
            return res.status(400).send(`
               <html>
+               <head>
+                 <style>
+                   @font-face {
+                     font-family: "Gothic";
+                     src: url("https://dizain.pro/fonts/GOTHIC.TTF") format("truetype");
+                   }
+
+                   body {
+                     font-family: "Gothic", sans-serif;
+                     -webkit-font-smoothing: antialiased;
+                   }
+                 </style>
+               </head>
                 <body style="
                  min-height:100vh;
                  background:#000;
@@ -859,6 +886,7 @@ app.post("/api/auth/register", async (req, res) => {
                  <div style="
                    width:100%;
                    max-width:420px;
+                   box-sizing:border-box;
                    text-align:center;
                    background:rgba(255,255,255,0.04);
                    border:1px solid rgba(255,255,255,0.05);
