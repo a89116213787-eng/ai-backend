@@ -1243,6 +1243,169 @@ app.get("/api/user/me", authMiddleware, async (req, res) => {
 });
 
 // ======================================================
+// 💬 SUPPORT SYSTEM
+// ======================================================
+
+// история пользователя
+app.get(
+"/api/support/history",
+authMiddleware,
+async(req,res)=>{
+
+try{
+
+const result=await pool.query(
+`
+SELECT
+id,
+message,
+sender,
+is_read,
+created_at
+FROM support_messages
+WHERE user_id=$1
+AND is_closed=false
+ORDER BY created_at ASC
+`,
+[req.user.id]
+);
+
+res.json({
+ok:true,
+messages:result.rows
+});
+
+}catch(e){
+
+console.error(
+"SUPPORT HISTORY ERROR:",
+e
+);
+
+res.status(500).json({
+ok:false
+});
+
+}
+
+});
+
+// пользователь отправляет
+app.post(
+"/api/support/send",
+authMiddleware,
+async(req,res)=>{
+
+try{
+
+const {message}=req.body;
+
+if(!message){
+
+return res.status(400).json({
+ok:false
+});
+
+}
+
+await pool.query(
+`
+INSERT INTO support_messages
+(
+user_id,
+message,
+sender
+)
+VALUES
+($1,$2,'user')
+`,
+[
+req.user.id,
+message
+]
+);
+
+res.json({
+ok:true
+});
+
+}catch(e){
+
+console.error(
+"SUPPORT SEND ERROR:",
+e
+);
+
+res.status(500).json({
+ok:false
+});
+
+}
+
+});
+
+// оператор отвечает
+app.post(
+"/api/support/reply",
+authMiddleware,
+requireAdmin,
+async(req,res)=>{
+
+try{
+
+const {
+userId,
+message
+}=req.body;
+
+if(
+!userId||
+!message
+){
+
+return res.status(400).json({
+ok:false
+});
+
+}
+
+await pool.query(
+`
+INSERT INTO support_messages
+(
+user_id,
+message,
+sender
+)
+VALUES
+($1,$2,'operator')
+`,
+[
+userId,
+message
+]
+);
+
+res.json({
+ok:true
+});
+
+}catch(e){
+
+console.error(
+"SUPPORT REPLY ERROR:",
+e
+);
+
+res.status(500).json({
+ok:false
+});
+
+}
+
+});
+
+// ======================================================
 // 🤖 AI ASSISTANT
 // ======================================================
 
