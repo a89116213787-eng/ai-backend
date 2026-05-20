@@ -1405,6 +1405,55 @@ ok:false
 
 });
 
+// завершение диалога
+app.post(
+"/api/support/close",
+authMiddleware,
+requireAdmin,
+async(req,res)=>{
+
+try{
+
+const {
+userId
+}=req.body;
+
+if(!userId){
+
+return res.status(400).json({
+ok:false
+});
+
+}
+
+await pool.query(
+`
+UPDATE support_messages
+SET is_closed=true
+WHERE user_id=$1
+`,
+[userId]
+);
+
+res.json({
+ok:true
+});
+
+}catch(e){
+
+console.error(
+"SUPPORT CLOSE ERROR:",
+e
+);
+
+res.status(500).json({
+ok:false
+});
+
+}
+
+});
+
 // ======================================================
 // 🤖 AI ASSISTANT
 // ======================================================
