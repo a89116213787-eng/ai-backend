@@ -1454,6 +1454,86 @@ ok:false
 
 });
 
+// список статусов поддержки для админки
+app.get(
+"/api/admin/support-status",
+authMiddleware,
+requireAdmin,
+async(req,res)=>{
+
+try{
+
+const result=
+await pool.query(
+`
+
+SELECT
+
+user_id,
+
+COUNT(*)
+FILTER(
+WHERE
+sender='user'
+AND is_read=false
+AND is_closed=false
+) as unread,
+
+CASE
+
+WHEN COUNT(*)
+FILTER(
+WHERE
+sender='user'
+AND is_read=false
+AND is_closed=false
+)>0
+
+THEN 'new'
+
+WHEN COUNT(*)
+FILTER(
+WHERE
+sender='operator'
+AND is_closed=false
+)>0
+
+THEN 'answered'
+
+ELSE 'closed'
+
+END as status
+
+FROM support_messages
+
+GROUP BY user_id
+
+`
+);
+
+res.json({
+
+ok:true,
+
+items:result.rows
+
+});
+
+}catch(e){
+
+console.error(
+"SUPPORT STATUS ERROR:",
+e
+);
+
+res.status(500).json({
+ok:false
+});
+
+}
+
+});
+
 // ======================================================
 // 🤖 AI ASSISTANT
 // ======================================================
