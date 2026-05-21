@@ -1534,6 +1534,164 @@ ok:false
 
 });
 
+// история конкретного пользователя для админа
+app.get(
+"/api/admin/support-history/:id",
+authMiddleware,
+requireAdmin,
+async(req,res)=>{
+
+try{
+
+const result=
+await pool.query(
+`
+SELECT
+id,
+message,
+sender,
+is_read,
+created_at
+FROM support_messages
+WHERE user_id=$1
+ORDER BY created_at ASC
+`,
+[
+req.params.id
+]
+);
+
+res.json({
+ok:true,
+messages:
+result.rows
+});
+
+}catch(e){
+
+console.error(
+"ADMIN SUPPORT HISTORY ERROR:",
+e
+);
+
+res.status(500).json({
+ok:false
+});
+
+}
+
+});
+
+// ответ оператора
+app.post(
+"/api/admin/support-reply",
+authMiddleware,
+requireAdmin,
+async(req,res)=>{
+
+try{
+
+const{
+userId,
+message
+}=req.body;
+
+if(
+!userId||
+!message
+){
+
+return res.status(400).json({
+ok:false
+});
+
+}
+
+await pool.query(
+`
+INSERT INTO support_messages
+(
+user_id,
+message,
+sender,
+is_read
+)
+VALUES
+(
+$1,
+$2,
+'operator',
+true
+)
+`,
+[
+userId,
+message
+]
+);
+
+res.json({
+ok:true
+});
+
+}catch(e){
+
+console.error(
+"ADMIN REPLY ERROR:",
+e
+);
+
+res.status(500).json({
+ok:false
+});
+
+}
+
+});
+
+// закрытие диалога
+app.post(
+"/api/admin/support-close",
+authMiddleware,
+requireAdmin,
+async(req,res)=>{
+
+try{
+
+const{
+userId
+}=req.body;
+
+await pool.query(
+`
+UPDATE support_messages
+SET is_closed=true
+WHERE user_id=$1
+`,
+[
+userId
+]
+);
+
+res.json({
+ok:true
+});
+
+}catch(e){
+
+console.error(
+"CLOSE CHAT ERROR:",
+e
+);
+
+res.status(500).json({
+ok:false
+});
+
+}
+
+});
+
 // ======================================================
 // 🤖 AI ASSISTANT
 // ======================================================
