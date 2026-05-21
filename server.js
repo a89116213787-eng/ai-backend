@@ -1344,116 +1344,6 @@ ok:false
 
 });
 
-// оператор отвечает
-app.post(
-"/api/support/reply",
-authMiddleware,
-requireAdmin,
-async(req,res)=>{
-
-try{
-
-const {
-userId,
-message
-}=req.body;
-
-if(
-!userId||
-!message
-){
-
-return res.status(400).json({
-ok:false
-});
-
-}
-
-await pool.query(
-`
-INSERT INTO support_messages
-(
-user_id,
-message,
-sender
-)
-VALUES
-($1,$2,'operator')
-`,
-[
-userId,
-message
-]
-);
-
-res.json({
-ok:true
-});
-
-}catch(e){
-
-console.error(
-"SUPPORT REPLY ERROR:",
-e
-);
-
-res.status(500).json({
-ok:false
-});
-
-}
-
-});
-
-// завершение диалога
-app.post(
-"/api/support/close",
-authMiddleware,
-requireAdmin,
-async(req,res)=>{
-
-try{
-
-const {
-userId
-}=req.body;
-
-if(!userId){
-
-return res.status(400).json({
-ok:false
-});
-
-}
-
-await pool.query(
-`
-UPDATE support_messages
-SET is_closed=true
-WHERE user_id=$1
-`,
-[userId]
-);
-
-res.json({
-ok:true
-});
-
-}catch(e){
-
-console.error(
-"SUPPORT CLOSE ERROR:",
-e
-);
-
-res.status(500).json({
-ok:false
-});
-
-}
-
-});
-
 // список статусов поддержки для админки
 app.get(
 "/api/admin/support-status",
@@ -1534,6 +1424,56 @@ ok:false
 
 });
 
+// ========================================
+// 🧹 AUTO CLEAN SUPPORT
+// ========================================
+
+setInterval(
+async()=>{
+
+try{
+
+await pool.query(
+`
+
+DELETE
+FROM support_messages
+
+WHERE
+is_closed=true
+
+AND created_at
+<
+NOW()
+-
+INTERVAL '30 days'
+
+`
+);
+
+console.log(
+"🧹 support cleaned"
+);
+
+}catch(e){
+
+console.error(
+"SUPPORT CLEAN ERROR:",
+e
+);
+
+}
+
+},
+1000
+*
+60
+*
+60
+*
+24
+);
+
 // история конкретного пользователя для админа
 app.get(
 "/api/admin/support-history/:id",
@@ -1554,6 +1494,7 @@ is_read,
 created_at
 FROM support_messages
 WHERE user_id=$1
+AND is_closed=false
 ORDER BY created_at ASC
 `,
 [
