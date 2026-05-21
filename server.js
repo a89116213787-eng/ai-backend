@@ -1571,6 +1571,17 @@ message
 ]
 );
 
+await pool.query(
+`
+UPDATE support_messages
+SET is_read=true
+WHERE user_id=$1
+AND sender='user'
+AND is_closed=false
+`,
+[userId]
+);
+
 res.json({
 ok:true
 });
