@@ -1424,6 +1424,46 @@ ok:false
 
 });
 
+// пользователь открыл поддержку → пометить ответы прочитанными
+app.post(
+"/api/support/read",
+authMiddleware,
+async(req,res)=>{
+
+try{
+
+await pool.query(
+`
+UPDATE support_messages
+SET is_read=true
+WHERE user_id=$1
+AND sender='operator'
+AND is_closed=false
+`,
+[
+req.user.id
+]
+);
+
+res.json({
+ok:true
+});
+
+}catch(e){
+
+console.error(
+"SUPPORT READ ERROR:",
+e
+);
+
+res.status(500).json({
+ok:false
+});
+
+}
+
+});
+
 // ========================================
 // 🧹 AUTO CLEAN SUPPORT
 // ========================================
@@ -1562,7 +1602,7 @@ VALUES
 $1,
 $2,
 'operator',
-true
+false
 )
 `,
 [
