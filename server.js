@@ -125,7 +125,28 @@ const data=
 query.data;
 
 const chatId=
-query.message.chat.id;
+query.message?.chat?.id;
+
+if(!chatId)return;
+
+if(
+String(chatId)!==
+String(
+TELEGRAM_ADMIN_ID
+)
+){
+
+await tgBot.answerCallbackQuery(
+query.id,
+{
+text:"Нет доступа",
+show_alert:true
+}
+);
+
+return;
+
+}
 
 if(
 data.startsWith(
@@ -207,6 +228,15 @@ try{
 
 const chatId=
 msg.chat.id;
+
+if(
+String(chatId)!==
+String(
+TELEGRAM_ADMIN_ID
+)
+){
+return;
+}
 
 const text=
 msg.text;
