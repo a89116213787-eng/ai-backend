@@ -55,16 +55,45 @@ autoStart:false
 }
 );
 
-// запускаем только один раз
-setTimeout(()=>{
+// сбрасываем старый polling
+tgBot.stopPolling()
+.catch(()=>{});
+
+tgBot.on(
+"polling_error",
+(e)=>{
+
+console.error(
+"TG POLLING ERROR:",
+e.message
+);
+
+}
+);
+
+// запускаем polling безопасно
+setTimeout(async()=>{
 
 try{
 
-tgBot.startPolling();
+const isPolling =
+await tgBot.isPolling();
+
+if(!isPolling){
+
+await tgBot.startPolling();
 
 console.log(
 "🤖 Telegram polling started"
 );
+
+}else{
+
+console.log(
+"🤖 Telegram already polling"
+);
+
+}
 
 }catch(e){
 
