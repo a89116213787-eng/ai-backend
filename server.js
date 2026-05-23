@@ -16,6 +16,7 @@ import Replicate from "replicate";
 import { S3Client, GetObjectCommand, PutObjectCommand, DeleteObjectCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
 import deleteImageRoute from "./delete-image.js";
 import multer from "multer";
+import TelegramBot from "node-telegram-bot-api";
 
 async function normalizeImageToBase64(img) {
 
@@ -39,6 +40,22 @@ async function normalizeImageToBase64(img) {
 }
 
 dotenv.config();
+
+// ===============================
+// TELEGRAM SUPPORT
+// ===============================
+
+const tgBot = new TelegramBot(
+process.env.TELEGRAM_BOT_TOKEN,
+{
+polling:true
+}
+);
+
+const TELEGRAM_ADMIN_ID=
+process.env.TELEGRAM_ADMIN_ID;
+
+let replyState={};
 
 // ===============================
 // REQUEST SIGNATURE SECRET
@@ -1324,6 +1341,60 @@ req.user.id,
 message
 ]
 );
+
+const user=await pool.query(
+`
+SELECT email
+FROM users
+WHERE id=$1
+`,
+[
+req.user.id
+]
+);
+
+const email=
+user.rows[0]?.email
+||
+"unknown";
+
+try{
+
+await tgBot.sendMessage(
+TELEGRAM_ADMIN_ID,
+
+`👤 ${email}
+
+${message}`,
+
+{
+reply_markup:{
+inline_keyboard:[
+[
+{
+text:"✉ Ответить",
+callback_data:
+`reply_${req.user.id}`
+},
+{
+text:"✅ Закрыть",
+callback_data:
+`close_${req.user.id}`
+}
+]
+]
+}
+}
+);
+
+}catch(e){
+
+console.error(
+"TG SEND ERROR:",
+e
+);
+
+}
 
 res.json({
 ok:true
