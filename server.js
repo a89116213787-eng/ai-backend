@@ -48,7 +48,11 @@ dotenv.config();
 const tgBot = new TelegramBot(
 process.env.TELEGRAM_BOT_TOKEN,
 {
-polling:true
+polling:{
+params:{
+timeout:10
+}
+}
 }
 );
 
@@ -56,7 +60,21 @@ tgBot.on(
 "polling_error",
 (e)=>{
 
+if(
+e.message?.includes(
+"409 Conflict"
+)
+){
+
 console.log(
+"TG: previous instance still shutting down"
+);
+
+return;
+
+}
+
+console.error(
 "TG POLLING:",
 e.message
 );
@@ -84,7 +102,7 @@ async(query)=>{
 try{
 
 const data=
-query.data;
+query.data||"";
 
 const chatId=
 query.message?.chat?.id;
@@ -201,7 +219,9 @@ return;
 }
 
 const text=
-msg.text;
+msg.text||"";
+
+if(!text)return;
 
 if(
 !replyState[
@@ -1531,7 +1551,9 @@ try{
 
 const {message}=req.body;
 
-if(!message){
+if(
+!message?.trim()
+){
 
 return res.status(400).json({
 ok:false
