@@ -48,9 +48,34 @@ dotenv.config();
 const tgBot = new TelegramBot(
 process.env.TELEGRAM_BOT_TOKEN,
 {
-polling:true
+polling:{
+interval:300,
+autoStart:false
+}
 }
 );
+
+// запускаем только один раз
+setTimeout(()=>{
+
+try{
+
+tgBot.startPolling();
+
+console.log(
+"🤖 Telegram polling started"
+);
+
+}catch(e){
+
+console.error(
+"TG START ERROR:",
+e
+);
+
+}
+
+},5000);
 
 const TELEGRAM_ADMIN_ID=
 process.env.TELEGRAM_ADMIN_ID;
