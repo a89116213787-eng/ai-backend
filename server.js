@@ -48,63 +48,25 @@ dotenv.config();
 const tgBot = new TelegramBot(
 process.env.TELEGRAM_BOT_TOKEN,
 {
-polling:{
-interval:300,
-autoStart:false
-}
+polling:true
 }
 );
-
-// сбрасываем старый polling
-tgBot.stopPolling()
-.catch(()=>{});
 
 tgBot.on(
 "polling_error",
 (e)=>{
 
-console.error(
-"TG POLLING ERROR:",
+console.log(
+"TG POLLING:",
 e.message
 );
 
 }
 );
 
-// запускаем polling безопасно
-setTimeout(async()=>{
-
-try{
-
-const isPolling =
-await tgBot.isPolling();
-
-if(!isPolling){
-
-await tgBot.startPolling();
-
 console.log(
-"🤖 Telegram polling started"
+"🤖 Telegram bot ready"
 );
-
-}else{
-
-console.log(
-"🤖 Telegram already polling"
-);
-
-}
-
-}catch(e){
-
-console.error(
-"TG START ERROR:",
-e
-);
-
-}
-
-},5000);
 
 const TELEGRAM_ADMIN_ID=
 process.env.TELEGRAM_ADMIN_ID;
