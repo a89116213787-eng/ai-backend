@@ -58,6 +58,174 @@ process.env.TELEGRAM_ADMIN_ID;
 let replyState={};
 
 // ===============================
+// TELEGRAM CALLBACKS
+// ===============================
+
+tgBot.on(
+"callback_query",
+async(query)=>{
+
+try{
+
+const data=
+query.data;
+
+const chatId=
+query.message.chat.id;
+
+if(
+data.startsWith(
+"reply_"
+)
+){
+
+const userId=
+data.replace(
+"reply_",
+""
+);
+
+replyState[
+chatId
+]=userId;
+
+await tgBot.sendMessage(
+chatId,
+"✍ Напишите ответ пользователю"
+);
+
+}
+
+if(
+data.startsWith(
+"close_"
+)
+){
+
+const userId=
+data.replace(
+"close_",
+""
+);
+
+await pool.query(
+`
+UPDATE support_messages
+SET is_closed=true
+WHERE user_id=$1
+`,
+[
+userId
+]
+);
+
+await tgBot.sendMessage(
+chatId,
+"✅ Диалог закрыт"
+);
+
+}
+
+await tgBot.answerCallbackQuery(
+query.id
+);
+
+}catch(e){
+
+console.error(
+"TG CALLBACK ERROR:",
+e
+);
+
+}
+
+});
+
+// ===============================
+// TELEGRAM TEXT REPLY
+// ===============================
+
+tgBot.on(
+"message",
+async(msg)=>{
+
+try{
+
+const chatId=
+msg.chat.id;
+
+const text=
+msg.text;
+
+if(
+!replyState[
+chatId
+]
+)
+return;
+
+const userId=
+replyState[
+chatId
+];
+
+await pool.query(
+`
+INSERT INTO support_messages
+(
+user_id,
+message,
+sender,
+is_read
+)
+VALUES
+(
+$1,
+$2,
+'operator',
+false
+)
+`,
+[
+userId,
+text
+]
+);
+
+await pool.query(
+`
+UPDATE support_messages
+SET is_read=true
+WHERE user_id=$1
+AND sender='user'
+AND is_closed=false
+`,
+[
+userId
+]
+);
+
+delete replyState[
+chatId
+];
+
+await tgBot.sendMessage(
+chatId,
+"✅ Ответ отправлен"
+);
+
+}catch(e){
+
+console.error(
+"TG REPLY ERROR:",
+e
+);
+
+}
+
+});
+
+// ===============================
 // REQUEST SIGNATURE SECRET
 // ===============================
 // const REQUEST_SECRET = process.env.REQUEST_SECRET;
