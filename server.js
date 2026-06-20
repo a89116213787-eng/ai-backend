@@ -1504,6 +1504,36 @@ app.get("/api/user/me", authMiddleware, async (req, res) => {
   }
 });
 
+app.post("/api/user/onboarding-complete", authMiddleware, async (req, res) => {
+  try {
+
+    await pool.query(
+      `
+      UPDATE users
+      SET onboarding_done = true
+      WHERE id = $1
+      `,
+      [req.user.id]
+    );
+
+    res.json({
+      ok: true
+    });
+
+  } catch (e) {
+
+    console.error(
+      "ONBOARDING COMPLETE ERROR:",
+      e
+    );
+
+    res.status(500).json({
+      ok: false
+    });
+
+  }
+});
+
 // ======================================================
 // 💬 SUPPORT SYSTEM
 // ======================================================
