@@ -4431,7 +4431,7 @@ app.post("/api/payments/yookassa-webhook", async (req, res) => {
       return res.json({ ok: true, ignored: true });
     }
 
-    if (!/^\d+$/.test(metadataPaymentId)) {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(metadataPaymentId)) {
       logYooKassaWebhookDiagnostic("invalid_metadata_payment_id");
       return res.json({ ok: true, ignored: true });
     }
