@@ -7,6 +7,7 @@ import fs from "fs";
 import path from "path";
 import express from "express";
 import cors from "cors";
+import axios from "axios";
 import dotenv from "dotenv";
 import { sendMail } from "./src/services/mailClient.js";
 import { verifyEmailTemplate } from "./src/templates/emails/verifyEmailTemplate.js";
@@ -4328,7 +4329,32 @@ app.get("/api/debug/users", authMiddleware, requireAdmin, async (req, res) => {
 // ======================================================
 // YOOKASSA WEBHOOK (БОЕВОЙ)
 // ======================================================
-app.post("/api/payments/webhook/yookassa", async (req, res) => {
+const YOOKASSA_PAYMENT_GET_TIMEOUT_MS = 7000;
+
+function logYooKassaWebhookDiagnostic(reason, details = {}) {
+  console.warn("YOOKASSA WEBHOOK DIAGNOSTIC:", {
+    reason,
+    ...details
+  });
+}
+
+function nonEmptyString(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function parseRubToKopecks(value) {
+  const normalized = String(value ?? "").trim().replace(",", ".");
+  const match = normalized.match(/^(\d+)(?:\.(\d{1,2}))?$/);
+
+  if (!match) return null;
+
+  const rubles = BigInt(match[1]);
+  const kopecks = BigInt((match[2] || "").padEnd(2, "0"));
+
+  return rubles * 100n + kopecks;
+}
+
+app.post("/api/payments/yookassa-webhook", async (req, res) => {
   try {
     const event = req.body;
 
@@ -4337,56 +4363,179 @@ app.post("/api/payments/webhook/yookassa", async (req, res) => {
       return res.json({ ok: true });
     }
 
-    const paymentObject = event.object;
+    const webhookPaymentId = nonEmptyString(event.object?.id);
 
-    const paymentId = paymentObject.metadata?.payment_id;
-
-    if (!paymentId) {
-      return res.status(400).json({
-        ok: false,
-        error: "payment_id not found in metadata",
-      });
+    if (!webhookPaymentId) {
+      logYooKassaWebhookDiagnostic("missing_webhook_payment_id");
+      return res.json({ ok: true, ignored: true });
     }
 
+    let yookassaResponse;
+
+    try {
+      yookassaResponse = await axios.get(
+        `https://api.yookassa.ru/v3/payments/${encodeURIComponent(webhookPaymentId)}`,
+        {
+          auth: {
+            username: process.env.YOOKASSA_SHOP_ID,
+            password: process.env.YOOKASSA_SECRET_KEY
+          },
+          timeout: YOOKASSA_PAYMENT_GET_TIMEOUT_MS,
+          validateStatus: () => true
+        }
+      );
+    } catch (lookupError) {
+      logYooKassaWebhookDiagnostic("yookassa_payment_lookup_unavailable", {
+        code: lookupError.code || "unknown"
+      });
+      return res.status(503).json({ ok: false });
+    }
+
+    if (yookassaResponse.status === 401 || yookassaResponse.status === 403) {
+      logYooKassaWebhookDiagnostic("yookassa_auth_failed", {
+        status: yookassaResponse.status
+      });
+      return res.status(500).json({ ok: false });
+    }
+
+    if (yookassaResponse.status === 404 || yookassaResponse.status >= 500) {
+      logYooKassaWebhookDiagnostic("yookassa_payment_lookup_temporary_failure", {
+        status: yookassaResponse.status
+      });
+      return res.status(503).json({ ok: false });
+    }
+
+    if (yookassaResponse.status !== 200) {
+      logYooKassaWebhookDiagnostic("yookassa_payment_lookup_failed", {
+        status: yookassaResponse.status
+      });
+      return res.status(502).json({ ok: false });
+    }
+
+    const paymentObject = yookassaResponse.data;
+    const verifiedPaymentId = nonEmptyString(paymentObject?.id);
+    const metadataPaymentId = nonEmptyString(paymentObject?.metadata?.payment_id);
+    const metadataUserId = nonEmptyString(paymentObject?.metadata?.user_id);
+    const verifiedAmountKopecks = parseRubToKopecks(paymentObject?.amount?.value);
+
+    if (
+      verifiedPaymentId !== webhookPaymentId ||
+      paymentObject?.status !== "succeeded" ||
+      paymentObject?.paid !== true ||
+      paymentObject?.amount?.currency !== "RUB" ||
+      !metadataPaymentId ||
+      !metadataUserId ||
+      verifiedAmountKopecks === null
+    ) {
+      logYooKassaWebhookDiagnostic("verified_payment_validation_failed");
+      return res.json({ ok: true, ignored: true });
+    }
+
+    if (!/^\d+$/.test(metadataPaymentId)) {
+      logYooKassaWebhookDiagnostic("invalid_metadata_payment_id");
+      return res.json({ ok: true, ignored: true });
+    }
+
+    let paymentId = metadataPaymentId;
+
     // проверяем платёж
-    const result = await pool.query(
+    let result = await pool.query(
       "SELECT * FROM payments WHERE id = $1",
       [paymentId]
     );
 
     if (result.rows.length === 0) {
-      return res.status(404).json({
-        ok: false,
-        error: "payment not found",
-      });
+      result = await pool.query(
+        "SELECT * FROM payments WHERE external_id = $1",
+        [verifiedPaymentId]
+      );
+
+      if (result.rows.length === 0) {
+        logYooKassaWebhookDiagnostic("payment_not_found");
+        return res.json({ ok: true, ignored: true });
+      }
     }
 
     const payment = result.rows[0];
+    paymentId = payment.id;
     const userId = payment.user_id;
+    const dbAmountKopecks = parseRubToKopecks(payment.amount);
 
-    // защита от двойного вебхука
-    if (payment.status === "paid") {
-      return res.json({ ok: true, alreadyProcessed: true });
+    if (
+      String(payment.id) !== metadataPaymentId ||
+      String(payment.user_id) !== metadataUserId ||
+      payment.external_id !== verifiedPaymentId ||
+      dbAmountKopecks === null ||
+      dbAmountKopecks !== verifiedAmountKopecks
+    ) {
+      logYooKassaWebhookDiagnostic("payment_database_validation_failed");
+      return res.json({ ok: true, ignored: true });
     }
 
-    // отмечаем платёж
-    await pool.query(
-      "UPDATE payments SET status = 'paid', provider_payment_id = $1 WHERE id = $2",
-      [paymentObject.id, paymentId]
-    );
+    const client = await pool.connect();
 
-    // начисляем токены
-    await pool.query(
-      "UPDATE users SET tokens = tokens + $1 WHERE id = $2",
-      [payment.tokens, payment.user_id]
-    );
+    try {
+      await client.query("BEGIN");
+
+      const lockedPaymentResult = await client.query(
+        "SELECT * FROM payments WHERE id = $1 FOR UPDATE",
+        [paymentId]
+      );
+
+      if (lockedPaymentResult.rows.length === 0) {
+        await client.query("ROLLBACK");
+        logYooKassaWebhookDiagnostic("locked_payment_not_found");
+        return res.json({ ok: true, ignored: true });
+      }
+
+      const lockedPayment = lockedPaymentResult.rows[0];
+      const lockedDbAmountKopecks = parseRubToKopecks(lockedPayment.amount);
+
+      if (
+        String(lockedPayment.id) !== metadataPaymentId ||
+        String(lockedPayment.user_id) !== metadataUserId ||
+        lockedPayment.external_id !== verifiedPaymentId ||
+        lockedPayment.provider !== "yookassa" ||
+        lockedDbAmountKopecks === null ||
+        lockedDbAmountKopecks !== verifiedAmountKopecks
+      ) {
+        await client.query("ROLLBACK");
+        logYooKassaWebhookDiagnostic("locked_payment_validation_failed");
+        return res.json({ ok: true, ignored: true });
+      }
+
+      // защита от двойного вебхука
+      if (lockedPayment.status === "paid") {
+        await client.query("COMMIT");
+        return res.json({ ok: true, alreadyProcessed: true });
+      }
+
+      // отмечаем платёж
+      const paymentUpdate = await client.query(
+        "UPDATE payments SET status = 'paid', provider_payment_id = $1 WHERE id = $2",
+        [paymentObject.id, paymentId]
+      );
+
+      if (paymentUpdate.rowCount !== 1) {
+        throw new Error("payment_update_failed");
+      }
+
+      // начисляем токены
+      const userUpdate = await client.query(
+        "UPDATE users SET tokens = tokens + $1 WHERE id = $2",
+        [lockedPayment.tokens, lockedPayment.user_id]
+      );
+
+      if (userUpdate.rowCount !== 1) {
+        throw new Error("user_tokens_update_failed");
+      }
 
 // =======================
 // ПОДПИСКА
 // =======================
 
 // проверяем подписку
-const sub = await pool.query(
+const sub = await client.query(
   `SELECT expires_at FROM subscriptions WHERE user_id=$1`,
   [userId]
 );
@@ -4398,7 +4547,7 @@ if (sub.rows.length === 0) {
   const expires = new Date(now);
   expires.setDate(expires.getDate() + 30);
 
-  await pool.query(
+  await client.query(
     `INSERT INTO subscriptions (user_id, expires_at)
      VALUES ($1, $2)`,
     [userId, expires]
@@ -4411,7 +4560,7 @@ if (sub.rows.length === 0) {
     const newExpire = new Date(now);
     newExpire.setDate(newExpire.getDate() + 30);
 
-    await pool.query(
+    await client.query(
       `UPDATE subscriptions SET expires_at=$1 WHERE user_id=$2`,
       [newExpire, userId]
     );
@@ -4419,123 +4568,24 @@ if (sub.rows.length === 0) {
   // если активна — НЕ трогаем
 }
 
-    // лог
-    await pool.query(
-      `INSERT INTO token_logs (user_id, change, reason)
-       VALUES ($1, $2, 'payment')`,
-      [payment.user_id, payment.tokens]
-    );
+      // лог
+      await client.query(
+        `INSERT INTO token_logs (user_id, change, reason)
+         VALUES ($1, $2, 'payment')`,
+        [lockedPayment.user_id, lockedPayment.tokens]
+      );
 
-    return res.json({ ok: true });
+      await client.query("COMMIT");
+      return res.json({ ok: true });
+    } catch (transactionError) {
+      await client.query("ROLLBACK");
+      throw transactionError;
+    } finally {
+      client.release();
+    }
   } catch (e) {
     console.error("YOOKASSA WEBHOOK ERROR:", e);
     res.status(500).json({ ok: false });
-  }
-});
-
-// ======================================================
-// 💰 MOCK PAYMENT CONFIRM (как webhook ЮKassa)
-// ======================================================
-app.post("/api/payments/mock-paid", authMiddleware, async (req, res) => {
-  try {
-    const { payment_id } = req.body;
-
-    if (!payment_id) {
-      return res.status(400).json({
-        ok: false,
-        error: "payment_id обязателен",
-      });
-    }
-
-    // 1️⃣ получаем платёж
-    const paymentRes = await pool.query(
-      `SELECT * FROM payments WHERE id = $1`,
-      [payment_id]
-    );
-
-    if (paymentRes.rows.length === 0) {
-      return res.status(404).json({
-        ok: false,
-        error: "Платёж не найден",
-      });
-    }
-
-    const payment = paymentRes.rows[0];
-
-    if (payment.status === "paid") {
-      return res.json({
-        ok: true,
-        message: "Платёж уже подтверждён",
-      });
-    }
-
-    // 2️⃣ обновляем статус платежа
-    await pool.query(
-      `UPDATE payments SET status = 'paid' WHERE id = $1`,
-      [payment_id]
-    );
-
-    // 3️⃣ начисляем токены пользователю
-    await pool.query(
-      `
-      UPDATE users
-      SET tokens = tokens + $1
-      WHERE id = $2
-      `,
-      [payment.tokens, payment.user_id]
-    );
-
-    // =======================
-// ПОДПИСКА (1 месяц доступа)
-// =======================
-
-const userId = payment.user_id;
-
-const sub = await pool.query(
-  `SELECT expires_at FROM subscriptions WHERE user_id=$1`,
-  [userId]
-);
-
-const now = new Date();
-
-if (sub.rows.length === 0) {
-  // подписки нет → создаём на 30 дней
-  const expires = new Date(now);
-  expires.setDate(expires.getDate() + 30);
-
-  await pool.query(
-    `INSERT INTO subscriptions (user_id, expires_at)
-     VALUES ($1, $2)`,
-    [userId, expires]
-  );
-
-} else {
-  const expires = new Date(sub.rows[0].expires_at);
-
-  // если подписка истекла → даём новый месяц
-  if (expires < now) {
-    const newExpire = new Date(now);
-    newExpire.setDate(newExpire.getDate() + 30);
-
-    await pool.query(
-      `UPDATE subscriptions SET expires_at=$1 WHERE user_id=$2`,
-      [newExpire, userId]
-    );
-  }
-  // если активна — НЕ продлеваем
-}
-
-    res.json({
-      ok: true,
-      message: "Платёж подтверждён, токены начислены",
-    });
-  } catch (e) {
-    console.error("MOCK PAID ERROR:", e);
-
-    res.status(500).json({
-      ok: false,
-      error: "Ошибка подтверждения платежа",
-    });
   }
 });
 

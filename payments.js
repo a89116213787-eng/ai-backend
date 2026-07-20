@@ -1,6 +1,11 @@
 import express from "express";
 import axios from "axios";
-import { v4 as uuidv4 } from "uuid";
+
+const PAYMENT_TARIFFS = [
+  { name: "basic", amount: 980, tokens: 260 },
+  { name: "pro", amount: 1900, tokens: 680 },
+  { name: "vip", amount: 3990, tokens: 1700 }
+];
 
 export default function paymentsRouter(pool, authMiddleware) {
   const router = express.Router();
@@ -13,15 +18,21 @@ router.post("/create", authMiddleware, async (req, res) => {
   try {
     const userId = req.user.id;
     const userEmail = req.user.email;
-    const amount = Number(req.body.amount);
-    const tokens = Number(req.body.tokens);
+    const requestedAmount = Number(req.body.amount);
+    const requestedTokens = Number(req.body.tokens);
 
-    if (!amount || !tokens) {
+    const tariff = PAYMENT_TARIFFS.find(
+      (item) => item.amount === requestedAmount && item.tokens === requestedTokens
+    );
+
+    if (!tariff) {
       return res.status(400).json({
         ok: false,
-        error: "invalid_data"
+        error: "invalid_tariff"
       });
     }
+
+    const { amount, tokens } = tariff;
 
     // создаём запись в БД
     const result = await pool.query(
@@ -32,6 +43,7 @@ router.post("/create", authMiddleware, async (req, res) => {
     );
 
     const paymentId = result.rows[0].id;
+    const idempotenceKey = `dizain-payment-${paymentId}`;
 
     // ============================
     // 💳 СОЗДАЕМ ПЛАТЕЖ В ЮKASSA
@@ -52,6 +64,10 @@ router.post("/create", authMiddleware, async (req, res) => {
 
         capture: true,
         description: `Покупка ${tokens} токенов`,
+        metadata: {
+          payment_id: String(paymentId),
+          user_id: String(userId)
+        },
 
         // 🔥 ВОТ ЭТО ОБЯЗАТЕЛЬНО!
         receipt: {
@@ -80,7 +96,7 @@ router.post("/create", authMiddleware, async (req, res) => {
           password: process.env.YOOKASSA_SECRET_KEY
         },
         headers: {
-          "Idempotence-Key": uuidv4()
+          "Idempotence-Key": idempotenceKey
         }
       }
     );
