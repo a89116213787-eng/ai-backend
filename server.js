@@ -938,7 +938,7 @@ app.post("/api/auth/register", async (req, res) => {
 
       const now = new Date();
       const expires = new Date(now);
-      expires.setDate(expires.getDate() + 5);
+      expires.setDate(expires.getDate() + 30);
 
       await client.query(
         `INSERT INTO subscriptions (user_id, expires_at)

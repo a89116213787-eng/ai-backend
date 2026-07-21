@@ -2,9 +2,9 @@ import express from "express";
 import axios from "axios";
 
 const PAYMENT_TARIFFS = [
-  { name: "basic", amount: 980, tokens: 260 },
-  { name: "pro", amount: 1900, tokens: 680 },
-  { name: "vip", amount: 3990, tokens: 1700 }
+  { name: "basic", amount: 999, tokens: 260 },
+  { name: "pro", amount: 1999, tokens: 680 },
+  { name: "vip", amount: 3999, tokens: 1700 }
 ];
 
 export default function paymentsRouter(pool, authMiddleware) {
