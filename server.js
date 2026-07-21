@@ -68,7 +68,7 @@ e.message?.includes(
 ){
 
 console.log(
-"TG: previous instance still shutting down"
+"TG: another active polling instance is using this bot token"
 );
 
 return;
@@ -4288,8 +4288,68 @@ setInterval(
 // ==================
 // START SERVER
 // ==================
-app.listen(PORT, () => {
+const httpServer = app.listen(PORT, () => {
   console.log(`🚀 AI backend running on port ${PORT}`);
+});
+
+let isShuttingDown = false;
+
+async function gracefulShutdown(signal) {
+  if (isShuttingDown) {
+    console.log(`Shutdown already in progress (${signal})`);
+    return;
+  }
+
+  isShuttingDown = true;
+  console.log(`Shutdown started (${signal})`);
+
+  const shutdownTimeout = setTimeout(() => {
+    console.error("Shutdown timeout, forcing exit");
+    process.exit(1);
+  }, 15000);
+  shutdownTimeout.unref?.();
+
+  try {
+    await tgBot.stopPolling();
+    console.log("Telegram polling stopped");
+  } catch (e) {
+    console.error("TG STOP POLLING ERROR:", e?.message || e);
+  }
+
+  try {
+    await new Promise((resolve, reject) => {
+      httpServer.close((err) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+
+        resolve();
+      });
+    });
+    console.log("HTTP server closed");
+  } catch (e) {
+    console.error("HTTP SERVER CLOSE ERROR:", e?.message || e);
+  }
+
+  try {
+    await pool.end();
+    console.log("DB pool closed");
+  } catch (e) {
+    console.error("DB POOL CLOSE ERROR:", e?.message || e);
+  }
+
+  clearTimeout(shutdownTimeout);
+  console.log("Shutdown complete");
+  process.exit(0);
+}
+
+process.on("SIGTERM", () => {
+  void gracefulShutdown("SIGTERM");
+});
+
+process.on("SIGINT", () => {
+  void gracefulShutdown("SIGINT");
 });
 
 app.get("/api/debug/users", authMiddleware, requireAdmin, async (req, res) => {
