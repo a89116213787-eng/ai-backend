@@ -2422,6 +2422,8 @@ res.flushHeaders();
 
 let reply = "";
 
+try {
+
 const stream = await ai.models.generateContentStream({
   model: "gemini-2.5-flash",
 
@@ -2446,7 +2448,7 @@ Maximum images per request:
 ${GENERATOR_CAPABILITIES.maxImages}
 `,
     temperature: 0.7,
-    maxOutputTokens: 1000
+    maxOutputTokens: 4000
   },
 
   contents: [
@@ -2469,8 +2471,35 @@ ${GENERATOR_CAPABILITIES.maxImages}
 
 for await (const chunk of stream) {
 
+  const finishReason = chunk?.candidates?.[0]?.finishReason;
+
+  if (finishReason) {
+    console.log("ASSISTANT FINISH_REASON:", finishReason);
+  }
+
+  const usageMetadata = chunk?.usageMetadata;
+  const usageLog = {};
+
+  if (typeof usageMetadata?.promptTokenCount === "number") {
+    usageLog.promptTokenCount = usageMetadata.promptTokenCount;
+  }
+
+  if (typeof usageMetadata?.candidatesTokenCount === "number") {
+    usageLog.candidatesTokenCount = usageMetadata.candidatesTokenCount;
+  }
+
+  if (typeof usageMetadata?.totalTokenCount === "number") {
+    usageLog.totalTokenCount = usageMetadata.totalTokenCount;
+  }
+
+  if (Object.keys(usageLog).length > 0) {
+    console.log("ASSISTANT USAGE_METADATA:", usageLog);
+  }
+
   const text =
-    chunk?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+    chunk?.candidates?.[0]?.content?.parts
+      ?.map(part => typeof part?.text === "string" ? part.text : "")
+      .join("") || "";
 
   if (text) {
 
@@ -2483,6 +2512,18 @@ for await (const chunk of stream) {
 }
 
 res.write(`data: [DONE]\n\n`);
+
+} catch (e) {
+
+console.error("ASSISTANT STREAM ERROR:", e?.message || e);
+
+if (!res.writableEnded) {
+  res.end();
+}
+
+return;
+
+}
 
 // ===============================
 // 💾 СОХРАНЯЕМ ОТВЕТ АССИСТЕНТА
