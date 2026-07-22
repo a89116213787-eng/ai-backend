@@ -2448,6 +2448,9 @@ Maximum images per request:
 ${GENERATOR_CAPABILITIES.maxImages}
 `,
     temperature: 0.7,
+    thinkingConfig: {
+      thinkingBudget: 512
+    },
     maxOutputTokens: 4000
   },
 
