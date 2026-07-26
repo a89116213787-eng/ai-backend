@@ -307,9 +307,23 @@ e
 // ==================
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
+  connectionTimeoutMillis: 10000,
+  idleTimeoutMillis: 30000,
+  keepAlive: true,
+  keepAliveInitialDelayMillis: 10000,
 });
 
 // проверка подключения
+pool.on("error", (e) => {
+  console.error("DB POOL IDLE CLIENT ERROR:", {
+    message: e?.message,
+    code: e?.code,
+    errno: e?.errno,
+    syscall: e?.syscall,
+    stack: e?.stack,
+  });
+});
+
 pool.query("SELECT 1")
   .then(() => console.log("✅ DB connected"))
   .catch((e) => {
