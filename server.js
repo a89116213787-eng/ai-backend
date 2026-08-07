@@ -4074,7 +4074,7 @@ await pool.query(
   [
     userId,
     prompt,
-    `https://ai-backend-bd2h.onrender.com/api/download-video/${videoKey}`
+    `https://api.dizain.pro/api/download-video/${videoKey}`
   ]
 );
 
@@ -4084,7 +4084,7 @@ videoCache.set(id, videoKey);
 return res.json({
   ok: true,
   status: "done",
-  video: `https://ai-backend-bd2h.onrender.com/api/download-video/${videoKey}`
+  video: `https://api.dizain.pro/api/download-video/${videoKey}`
 });
 
     }
