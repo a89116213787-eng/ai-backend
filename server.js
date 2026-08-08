@@ -1577,8 +1577,33 @@ ORDER BY created_at ASC
 [req.user.id]
 );
 
+let status="active";
+
+if(result.rows.length===0){
+
+const statusResult=await pool.query(
+`
+SELECT EXISTS (
+  SELECT 1
+  FROM support_messages
+  WHERE user_id=$1
+) AS has_any
+`,
+[req.user.id]
+);
+
+status=
+statusResult.rows[0]?.has_any
+?
+"closed"
+:
+"new";
+
+}
+
 res.json({
 ok:true,
+status,
 messages:result.rows
 });
 
