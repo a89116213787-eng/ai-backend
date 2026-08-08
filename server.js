@@ -1597,6 +1597,48 @@ ok:false
 
 });
 
+// статус непрочитанных ответов поддержки
+app.get(
+"/api/support/unread",
+authMiddleware,
+async(req,res)=>{
+
+try{
+
+const result=await pool.query(
+`
+SELECT EXISTS (
+  SELECT 1
+  FROM support_messages
+  WHERE user_id = $1
+  AND sender = 'operator'
+  AND is_read = false
+  AND is_closed = false
+) AS unread
+`,
+[req.user.id]
+);
+
+res.json({
+ok:true,
+unread:result.rows[0]?.unread === true
+});
+
+}catch(e){
+
+console.error(
+"SUPPORT UNREAD ERROR:",
+e
+);
+
+res.status(500).json({
+ok:false
+});
+
+}
+
+});
+
 // пользователь отправляет
 app.post(
 "/api/support/send",
