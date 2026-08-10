@@ -4065,10 +4065,12 @@ app.get("/api/video-status/:id", authMiddleware, async (req, res) => {
 
     // если уже загружали видео — отдаём сразу
     if (videoCache.has(id)) {
+      const videoKey = videoCache.get(id);
+
       return res.json({
         ok: true,
         status: "done",
-        video: videoCache.get(id)
+        video: `https://api.dizain.pro/api/download-video/${videoKey}`
       });
     }
 
