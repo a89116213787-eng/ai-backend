@@ -4864,10 +4864,21 @@ app.get("/api/payments/history", authMiddleware, async (req, res) => {
 // ======================================================
 app.get("/api/admin/payments", authMiddleware, async (req, res) => {
   try {
-    // 🔐 только админ
+    // 🔐 Только админ
     if (req.user.role !== "admin") {
       return res.status(403).json({ ok: false, error: "forbidden" });
     }
+
+    const rawLimit = Number(req.query.limit);
+    const rawOffset = Number(req.query.offset);
+    const limit = Math.min(
+      100,
+      Math.max(1, Number.isFinite(rawLimit) ? Math.trunc(rawLimit) : 20)
+    );
+    const offset = Math.max(
+      0,
+      Number.isFinite(rawOffset) ? Math.trunc(rawOffset) : 0
+    );
 
     const result = await pool.query(`
       SELECT
@@ -4881,11 +4892,22 @@ app.get("/api/admin/payments", authMiddleware, async (req, res) => {
       FROM payments p
       JOIN users u ON u.id = p.user_id
       ORDER BY p.created_at DESC
+      LIMIT $1 OFFSET $2
+    `, [limit, offset]);
+
+    const totalResult = await pool.query(`
+      SELECT COUNT(*)::int AS total
+      FROM payments p
+      JOIN users u ON u.id = p.user_id
     `);
+    const total = totalResult.rows[0]?.total ?? 0;
+    const hasMore = offset + result.rows.length < total;
 
     return res.json({
       ok: true,
       payments: result.rows,
+      total,
+      hasMore,
     });
   } catch (e) {
     console.error("ADMIN PAYMENTS ERROR:", e);
