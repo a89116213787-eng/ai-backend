@@ -4513,6 +4513,16 @@ process.on("SIGINT", () => {
 
 app.get("/api/debug/users", authMiddleware, requireAdmin, async (req, res) => {
   try {
+    const rawLimit = Number(req.query.limit);
+    const rawOffset = Number(req.query.offset);
+    const limit = Math.min(
+      100,
+      Math.max(1, Number.isFinite(rawLimit) ? Math.trunc(rawLimit) : 20)
+    );
+    const offset = Math.max(
+      0,
+      Number.isFinite(rawOffset) ? Math.trunc(rawOffset) : 0
+    );
 
     const result = await pool.query(`
       SELECT
@@ -4531,11 +4541,21 @@ app.get("/api/debug/users", authMiddleware, requireAdmin, async (req, res) => {
 
       FROM users u
       ORDER BY u.created_at DESC
+      LIMIT $1 OFFSET $2
+    `, [limit, offset]);
+
+    const totalResult = await pool.query(`
+      SELECT COUNT(*)::int AS total
+      FROM users
     `);
+    const total = totalResult.rows[0]?.total ?? 0;
+    const hasMore = offset + result.rows.length < total;
 
     res.json({
       ok: true,
       users: result.rows,
+      total,
+      hasMore,
     });
   } catch (e) {
     res.status(500).json({
