@@ -11,7 +11,7 @@ import axios from "axios";
 import dotenv from "dotenv";
 import { sendMail } from "./src/services/mailClient.js";
 import { verifyEmailTemplate } from "./src/templates/emails/verifyEmailTemplate.js";
-import { uploadToR2, uploadPromptImageToR2, deletePromptImageFromR2 } from "./utils/uploadToR2.js";
+import { uploadToR2, uploadPromptImageToR2, uploadPromptImagePreviewToR2, deletePromptImageFromR2 } from "./utils/uploadToR2.js";
 import sharp from "sharp";
 import Replicate from "replicate";
 import { S3Client, GetObjectCommand, PutObjectCommand, DeleteObjectCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
@@ -2779,12 +2779,27 @@ app.post("/api/upload-image", authMiddleware, uploadPromptImageFile, async (req,
       .toBuffer();
 
     // 🔥 загружаем в R2
+    const previewBuffer = await sharp(file.buffer)
+      .rotate()
+      .resize({
+        width: 320,
+        height: 320,
+        fit: "inside",
+        withoutEnlargement: true
+      })
+      .webp({ quality: 60 })
+      .toBuffer();
+
     const { url, key } = await uploadPromptImageToR2(webpBuffer, req.user.id, uploadId);
+    const { url: previewUrl, key: previewKey } =
+      await uploadPromptImagePreviewToR2(previewBuffer, req.user.id, uploadId);
 
     return res.json({
       ok: true,
       url,
-      key
+      key,
+      previewUrl,
+      previewKey
     });
 
   } catch (e) {
@@ -2967,13 +2982,14 @@ function isPromptImageKey(key) {
 
 function getPromptImageKeyParts(key) {
   const uuid = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
-  const match = key.match(new RegExp(`^i/prompt-(${uuid})-(${uuid})\\.webp$`, "i"));
+  const match = key.match(new RegExp(`^i/prompt-(${uuid})-(${uuid})(-preview)?\\.webp$`, "i"));
 
   if (!match) return null;
 
   return {
     owner: match[1],
-    uploadId: match[2]
+    uploadId: match[2],
+    variant: match[3] ? "preview" : "original"
   };
 }
 

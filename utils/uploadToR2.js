@@ -83,6 +83,29 @@ export async function uploadPromptImageToR2(buffer, userId, uploadId) {
   };
 }
 
+export async function uploadPromptImagePreviewToR2(buffer, userId, uploadId) {
+
+  const owner = getPromptImageOwnerSegment(userId);
+  const id = getPromptImageUploadSegment(uploadId);
+  const key = `i/prompt-${owner}-${id}-preview.webp`;
+
+  await s3.send(
+    new PutObjectCommand({
+      Bucket: process.env.R2_BUCKET,
+      Key: key,
+      Body: buffer,
+      ContentType: "image/webp",
+    })
+  );
+
+  const url = `https://pub-4492119d79ef42ebb8609370399fa7b8.r2.dev/${key}`;
+
+  return {
+    url,
+    key
+  };
+}
+
 export async function deletePromptImageFromR2(key) {
   await s3.send(
     new DeleteObjectCommand({
