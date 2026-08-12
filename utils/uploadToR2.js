@@ -10,6 +10,8 @@ const s3 = new S3Client({
   },
 });
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export async function uploadToR2(buffer, folder = "i") {
 
   const { url } = await uploadToR2WithKey(buffer, folder);
@@ -41,17 +43,27 @@ export async function uploadToR2WithKey(buffer, folder = "i") {
 function getPromptImageOwnerSegment(userId) {
   const owner = String(userId);
 
-  if (!/^[A-Za-z0-9_-]+$/.test(owner)) {
+  if (!UUID_PATTERN.test(owner)) {
     throw new Error("invalid prompt image owner");
   }
 
   return owner;
 }
 
-export async function uploadPromptImageToR2(buffer, userId) {
+function getPromptImageUploadSegment(uploadId) {
+  const id = String(uploadId);
+
+  if (!UUID_PATTERN.test(id)) {
+    throw new Error("invalid prompt image upload id");
+  }
+
+  return id;
+}
+
+export async function uploadPromptImageToR2(buffer, userId, uploadId) {
 
   const owner = getPromptImageOwnerSegment(userId);
-  const id = crypto.randomUUID();
+  const id = getPromptImageUploadSegment(uploadId);
   const key = `i/prompt-${owner}-${id}.webp`;
 
   await s3.send(

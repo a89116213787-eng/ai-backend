@@ -2720,11 +2720,19 @@ app.post("/api/upload-image", authMiddleware, uploadPromptImageFile, async (req,
   try {
 
     const file = req.file;
+    const { uploadId } = req.body;
 
     if (!file) {
       return res.status(400).json({
         ok: false,
         error: "file required"
+      });
+    }
+
+    if (typeof uploadId !== "string" || !isUuid(uploadId)) {
+      return res.status(400).json({
+        ok: false,
+        error: "invalid_upload_id"
       });
     }
 
@@ -2771,7 +2779,7 @@ app.post("/api/upload-image", authMiddleware, uploadPromptImageFile, async (req,
       .toBuffer();
 
     // 🔥 загружаем в R2
-    const { url, key } = await uploadPromptImageToR2(webpBuffer, req.user.id);
+    const { url, key } = await uploadPromptImageToR2(webpBuffer, req.user.id, uploadId);
 
     return res.json({
       ok: true,
@@ -2949,13 +2957,24 @@ app.get("/api/workspace/load", authMiddleware, async (req, res) => {
 // 🖼 USER GENERATIONS HISTORY
 // ======================================================
 // PROMPT CARD IMAGE DELETE
-function isPromptImageKey(key) {
-  return /^i\/prompt-[A-Za-z0-9_-]+-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.webp$/i.test(key);
+function isUuid(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 }
 
-function getPromptImageKeyOwner(key) {
-  const match = key.match(/^i\/prompt-([A-Za-z0-9_-]+)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.webp$/i);
-  return match?.[1] || null;
+function isPromptImageKey(key) {
+  return getPromptImageKeyParts(key) !== null;
+}
+
+function getPromptImageKeyParts(key) {
+  const uuid = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+  const match = key.match(new RegExp(`^i/prompt-(${uuid})-(${uuid})\\.webp$`, "i"));
+
+  if (!match) return null;
+
+  return {
+    owner: match[1],
+    uploadId: match[2]
+  };
 }
 
 app.post("/api/prompt-card/delete-image", authMiddleware, async (req, res) => {
@@ -2970,9 +2989,9 @@ app.post("/api/prompt-card/delete-image", authMiddleware, async (req, res) => {
       });
     }
 
-    const owner = getPromptImageKeyOwner(key);
+    const keyParts = getPromptImageKeyParts(key);
 
-    if (owner !== String(userId)) {
+    if (!keyParts || keyParts.owner !== String(userId)) {
       return res.status(403).json({
         ok: false,
         error: "not_owned"
