@@ -11,7 +11,7 @@ import axios from "axios";
 import dotenv from "dotenv";
 import { sendMail } from "./src/services/mailClient.js";
 import { verifyEmailTemplate } from "./src/templates/emails/verifyEmailTemplate.js";
-import { uploadToR2 } from "./utils/uploadToR2.js";
+import { uploadToR2, uploadPromptImageToR2 } from "./utils/uploadToR2.js";
 import sharp from "sharp";
 import Replicate from "replicate";
 import { S3Client, GetObjectCommand, PutObjectCommand, DeleteObjectCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
@@ -2122,6 +2122,35 @@ ok:false
       storage: multer.memoryStorage()
     });
 
+    const promptImageUpload = multer({
+      storage: multer.memoryStorage(),
+      limits: {
+        fileSize: 10 * 1024 * 1024
+      }
+    });
+
+    function uploadPromptImageFile(req, res, next) {
+      promptImageUpload.single("file")(req, res, (err) => {
+        if (!err) {
+          next();
+          return;
+        }
+
+        if (err.code === "LIMIT_FILE_SIZE") {
+          res.status(413).json({
+            ok: false,
+            error: "file too large"
+          });
+          return;
+        }
+
+        res.status(400).json({
+          ok: false,
+          error: "upload parse failed"
+        });
+      });
+    }
+
     const GENERATOR_CAPABILITIES = {
   models: [
     "gemini-2.5-flash-image",
@@ -2687,34 +2716,67 @@ if (!res.headersSent) {
 // IMAGE UPLOAD (PROMPT CARD)
 // ======================================================
 
-app.post("/api/upload-image", authMiddleware, async (req, res) => {
+app.post("/api/upload-image", authMiddleware, uploadPromptImageFile, async (req, res) => {
   try {
 
-    const { image } = req.body;
+    const file = req.file;
 
-    if (!image) {
+    if (!file) {
       return res.status(400).json({
         ok: false,
-        error: "image required"
+        error: "file required"
       });
     }
 
-    // убираем data:image/...;base64
-    const base64 = image.replace(/^data:.*;base64,/, "");
+    const allowedMimeTypes = new Set([
+      "image/jpeg",
+      "image/png",
+      "image/webp"
+    ]);
 
-    const buffer = Buffer.from(base64, "base64");
+    if (!allowedMimeTypes.has(file.mimetype)) {
+      return res.status(400).json({
+        ok: false,
+        error: "unsupported image type"
+      });
+    }
+
+    const metadata = await sharp(file.buffer).metadata();
+    const allowedFormats = new Set(["jpeg", "png", "webp"]);
+
+    if (!metadata.format || !allowedFormats.has(metadata.format)) {
+      return res.status(400).json({
+        ok: false,
+        error: "unsupported image format"
+      });
+    }
+
+    if (metadata.pages && metadata.pages > 1) {
+      return res.status(400).json({
+        ok: false,
+        error: "animated images are not supported"
+      });
+    }
 
     // 🔥 конвертируем в WEBP
-    const webpBuffer = await sharp(buffer)
+    const webpBuffer = await sharp(file.buffer)
+      .rotate()
+      .resize({
+        width: 1600,
+        height: 1600,
+        fit: "inside",
+        withoutEnlargement: true
+      })
       .webp({ quality: 85 })
       .toBuffer();
 
     // 🔥 загружаем в R2
-    const imageUrl = await uploadToR2(webpBuffer);
+    const { url, key } = await uploadPromptImageToR2(webpBuffer, req.user.id);
 
     return res.json({
       ok: true,
-      url: imageUrl
+      url,
+      key
     });
 
   } catch (e) {
@@ -2886,6 +2948,56 @@ app.get("/api/workspace/load", authMiddleware, async (req, res) => {
 // ======================================================
 // 🖼 USER GENERATIONS HISTORY
 // ======================================================
+// PROMPT CARD IMAGE DELETE
+function isPromptImageKey(key) {
+  return /^i\/prompt-[A-Za-z0-9_-]+-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.webp$/i.test(key);
+}
+
+function getPromptImageKeyOwner(key) {
+  const match = key.match(/^i\/prompt-([A-Za-z0-9_-]+)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.webp$/i);
+  return match?.[1] || null;
+}
+
+app.post("/api/prompt-card/delete-image", authMiddleware, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { key } = req.body;
+
+    if (typeof key !== "string" || !isPromptImageKey(key)) {
+      return res.status(400).json({
+        ok: false,
+        error: "invalid_key"
+      });
+    }
+
+    const owner = getPromptImageKeyOwner(key);
+
+    if (owner !== String(userId)) {
+      return res.status(403).json({
+        ok: false,
+        error: "not_owned"
+      });
+    }
+
+    await s3.send(
+      new DeleteObjectCommand({
+        Bucket: process.env.R2_BUCKET,
+        Key: key
+      })
+    );
+
+    res.json({ ok: true });
+
+  } catch (e) {
+    console.error("PROMPT IMAGE DELETE ERROR:", e);
+    res.status(500).json({
+      ok: false,
+      error: "delete_failed"
+    });
+  }
+});
+
+// USER GENERATIONS HISTORY
 app.get("/api/user/generations", authMiddleware, async (req, res) => {
   try {
     const userId = req.user.id;
