@@ -11,7 +11,7 @@ import axios from "axios";
 import dotenv from "dotenv";
 import { sendMail } from "./src/services/mailClient.js";
 import { verifyEmailTemplate } from "./src/templates/emails/verifyEmailTemplate.js";
-import { uploadToR2, uploadPromptImageToR2 } from "./utils/uploadToR2.js";
+import { uploadToR2, uploadPromptImageToR2, deletePromptImageFromR2 } from "./utils/uploadToR2.js";
 import sharp from "sharp";
 import Replicate from "replicate";
 import { S3Client, GetObjectCommand, PutObjectCommand, DeleteObjectCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
@@ -2998,12 +2998,7 @@ app.post("/api/prompt-card/delete-image", authMiddleware, async (req, res) => {
       });
     }
 
-    await s3.send(
-      new DeleteObjectCommand({
-        Bucket: process.env.R2_BUCKET,
-        Key: key
-      })
-    );
+    await deletePromptImageFromR2(key);
 
     res.json({ ok: true });
 

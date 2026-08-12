@@ -1,4 +1,4 @@
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
 import crypto from "crypto";
 
 const s3 = new S3Client({
@@ -81,4 +81,13 @@ export async function uploadPromptImageToR2(buffer, userId, uploadId) {
     url,
     key
   };
+}
+
+export async function deletePromptImageFromR2(key) {
+  await s3.send(
+    new DeleteObjectCommand({
+      Bucket: process.env.R2_BUCKET,
+      Key: key
+    })
+  );
 }
