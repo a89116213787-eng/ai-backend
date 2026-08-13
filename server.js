@@ -2125,7 +2125,7 @@ ok:false
     const promptImageUpload = multer({
       storage: multer.memoryStorage(),
       limits: {
-        fileSize: 10 * 1024 * 1024
+        fileSize: 2 * 1024 * 1024
       }
     });
 
@@ -2139,7 +2139,7 @@ ok:false
         if (err.code === "LIMIT_FILE_SIZE") {
           res.status(413).json({
             ok: false,
-            error: "file too large"
+            error: "file_too_large"
           });
           return;
         }
