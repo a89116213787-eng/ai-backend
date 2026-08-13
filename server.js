@@ -11,7 +11,7 @@ import axios from "axios";
 import dotenv from "dotenv";
 import { sendMail } from "./src/services/mailClient.js";
 import { verifyEmailTemplate } from "./src/templates/emails/verifyEmailTemplate.js";
-import { uploadToR2, uploadPromptImageToR2, uploadPromptImagePreviewToR2, deletePromptImageFromR2 } from "./utils/uploadToR2.js";
+import { uploadToR2, uploadToR2WithKey, uploadPromptImageToR2, uploadPromptImagePreviewToR2, deletePromptImageFromR2, deleteFromR2ByKey, getObjectFromR2ByKey } from "./utils/uploadToR2.js";
 import sharp from "sharp";
 import Replicate from "replicate";
 import { S3Client, GetObjectCommand, PutObjectCommand, DeleteObjectCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
@@ -606,7 +606,14 @@ app.post("/api/admin/add-tokens", authMiddleware, requireAdmin, async (req, res)
 // ======================================================
 async function deleteUserWithCleanup(userId) {
 
-  const user = await pool.query(
+  const client = await pool.connect();
+  const cleanupKeys = new Map();
+
+try {
+
+  await client.query("BEGIN");
+
+  const user = await client.query(
     `SELECT avatar_url FROM users WHERE id = $1`,
     [userId]
   );
@@ -615,73 +622,53 @@ async function deleteUserWithCleanup(userId) {
     throw new Error("user_not_found");
   }
 
-  const avatar = user.rows[0]?.avatar_url;
-
-  const s3 = new S3Client({
-    region: "auto",
-    endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-    credentials: {
-      accessKeyId: process.env.R2_ACCESS_KEY,
-      secretAccessKey: process.env.R2_SECRET_KEY,
-    },
-  });
-
-  const files = await pool.query(
-    `SELECT image_url, video_url FROM generations WHERE user_id = $1`,
+  const files = await client.query(
+    `SELECT image_url, image_key, video_url FROM generations WHERE user_id = $1`,
     [userId]
   );
 
   for (const row of files.rows) {
+    const imageKey = getGeneratedImageKey(row);
 
-    const urls = [row.image_url, row.video_url].filter(Boolean);
+    if (row.image_url && !imageKey) {
+      throw new Error("invalid_generated_image_key");
+    }
 
-    for (const url of urls) {
+    if (imageKey) {
+      cleanupKeys.set(imageKey, "generated_image");
+    }
 
-      if (!url) continue;
+    const videoKey = getGeneratedVideoKey(row.video_url);
 
-      try {
+    if (row.video_url && !videoKey) {
+      throw new Error("invalid_generated_video_key");
+    }
 
-        let key;
-
-      if (url.includes("/api/download-video/")) {
-        key = "videos/" + url.split("/api/download-video/")[1];
-      } else {
-        const parsed = new URL(url);
-        key = parsed.pathname.slice(1);
-      }
-
-        await s3.send(new DeleteObjectCommand({
-          Bucket: process.env.R2_BUCKET,
-          Key: key
-        }));
-
-      } catch (e) {
-        console.error("R2 delete error:", e);
-      }
-
+    if (videoKey) {
+      cleanupKeys.set(videoKey, "generated_video");
     }
   }
 
-  if (avatar) {
-    try {
+  const workspace = await client.query(
+    `SELECT data FROM workspaces WHERE user_id = $1`,
+    [userId]
+  );
 
-      const key = new URL(avatar).pathname.slice(1);
-
-      await s3.send(new DeleteObjectCommand({
-        Bucket: process.env.R2_BUCKET,
-        Key: key
-      }));
-
-    } catch (e) {
-      console.error("avatar delete error:", e);
-    }
+  for (const row of workspace.rows) {
+    collectPromptCardCleanupKeys(row.data, userId, cleanupKeys);
   }
 
-  const client = await pool.connect();
+  const avatarKey = getAvatarKey(user.rows[0]?.avatar_url);
 
-try {
+  if (user.rows[0]?.avatar_url && !avatarKey) {
+    throw new Error("invalid_avatar_key");
+  }
 
-  await client.query("BEGIN");
+  if (avatarKey) {
+    cleanupKeys.set(avatarKey, "avatar");
+  }
+
+  await enqueueR2CleanupKeys(client, cleanupKeys);
 
   await client.query(`DELETE FROM generations WHERE user_id = $1`, [userId]);
   await client.query(`DELETE FROM assistant_messages WHERE user_id = $1`, [userId]);
@@ -706,6 +693,11 @@ try {
 
 }
 
+  if (cleanupKeys.size > 0) {
+    void cleanupQueuedR2Objects([...cleanupKeys.keys()]).catch((e) => {
+      console.error("R2 CLEANUP QUEUE IMMEDIATE ERROR:", e);
+    });
+  }
 }
 
 // ======================================================
@@ -2993,6 +2985,182 @@ function getPromptImageKeyParts(key) {
   };
 }
 
+function isGeneratedImageKey(key) {
+  if (typeof key !== "string") return false;
+
+  const match = key.match(/^i\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.webp$/i);
+  return Boolean(match);
+}
+
+function getGeneratedImageKey(row) {
+  if (isGeneratedImageKey(row?.image_key)) {
+    return row.image_key;
+  }
+
+  if (typeof row?.image_url !== "string") {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(row.image_url);
+    const key = parsed.pathname.replace(/^\/+/, "");
+
+    if (isGeneratedImageKey(key)) {
+      return key;
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+async function deleteGeneratedImageObject(row) {
+  const key = getGeneratedImageKey(row);
+
+  if (!key) {
+    throw new Error("invalid_generated_image_key");
+  }
+
+  await deleteFromR2ByKey(key);
+}
+
+function isGeneratedVideoKey(key) {
+  if (typeof key !== "string") return false;
+
+  return /^videos\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.mp4$/i.test(key);
+}
+
+function getGeneratedVideoKey(videoUrl) {
+  if (typeof videoUrl !== "string") {
+    return null;
+  }
+
+  if (isGeneratedVideoKey(videoUrl)) {
+    return videoUrl;
+  }
+
+  try {
+    const parsed = new URL(videoUrl);
+    const marker = "/api/download-video/";
+    const markerIndex = parsed.pathname.indexOf(marker);
+
+    if (markerIndex === -1) {
+      return null;
+    }
+
+    const fileName = parsed.pathname.slice(markerIndex + marker.length);
+    const key = `videos/${fileName}`;
+
+    if (isGeneratedVideoKey(key)) {
+      return key;
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+function getAvatarKey(avatarUrl) {
+  if (typeof avatarUrl !== "string") {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(avatarUrl);
+    const key = parsed.pathname.replace(/^\/+/, "");
+
+    if (/^avatars\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.webp$/i.test(key)) {
+      return key;
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+function collectPromptCardCleanupKeys(data, userId, cleanupKeys) {
+  const cards = Array.isArray(data?.cards) ? data.cards : [];
+
+  for (const card of cards) {
+    if (card?.type !== "prompt") continue;
+
+    for (const [field, objectType] of [
+      ["imageKey", "prompt_image"],
+      ["previewImageKey", "prompt_preview"]
+    ]) {
+      const key = card?.[field];
+      const keyParts = typeof key === "string" ? getPromptImageKeyParts(key) : null;
+
+      if (keyParts && keyParts.owner === String(userId)) {
+        cleanupKeys.set(key, objectType);
+      }
+    }
+  }
+}
+
+async function enqueueR2CleanupKeys(client, cleanupKeys) {
+  for (const [objectKey, objectType] of cleanupKeys) {
+    await client.query(
+      `
+      INSERT INTO r2_cleanup_queue (object_key, object_type)
+      VALUES ($1, $2)
+      ON CONFLICT (object_key) DO NOTHING
+      `,
+      [objectKey, objectType]
+    );
+  }
+}
+
+async function cleanupQueuedR2Objects(objectKeys = null) {
+  try {
+    const result = Array.isArray(objectKeys) && objectKeys.length
+      ? await pool.query(
+        `
+        SELECT id, object_key
+        FROM r2_cleanup_queue
+        WHERE object_key = ANY($1::text[])
+        ORDER BY created_at ASC
+        `,
+        [objectKeys]
+      )
+      : await pool.query(
+        `
+        SELECT id, object_key
+        FROM r2_cleanup_queue
+        ORDER BY created_at ASC
+        `
+      );
+
+    for (const row of result.rows) {
+      try {
+        await deleteFromR2ByKey(row.object_key);
+
+        await pool.query(
+          `DELETE FROM r2_cleanup_queue WHERE id = $1`,
+          [row.id]
+        );
+      } catch (e) {
+        await pool.query(
+          `
+          UPDATE r2_cleanup_queue
+          SET
+            attempts = attempts + 1,
+            last_attempt_at = NOW(),
+            last_error = $2
+          WHERE id = $1
+          `,
+          [row.id, String(e?.message || e).slice(0, 500)]
+        );
+      }
+    }
+  } catch (e) {
+    console.error("R2 CLEANUP QUEUE ERROR:", e);
+  }
+}
+
 app.post("/api/prompt-card/delete-image", authMiddleware, async (req, res) => {
   try {
     const userId = req.user.id;
@@ -3879,13 +4047,13 @@ if (imageBase64) {
     .webp({ quality: 85 })
     .toBuffer();
 
-  const imageUrl = await uploadToR2(webpBuffer);
+  const { url: imageUrl, key: imageKey } = await uploadToR2WithKey(webpBuffer);
 
   const result = await pool.query(
-  `INSERT INTO generations (user_id, prompt, image_url)
-   VALUES ($1, $2, $3)
+  `INSERT INTO generations (user_id, prompt, image_url, image_key)
+   VALUES ($1, $2, $3, $4)
    RETURNING id`,
-  [id, prompt, imageUrl]
+  [id, prompt, imageUrl, imageKey]
 );
 
   return res.json({
@@ -3986,33 +4154,26 @@ app.get("/api/download/:id", authMiddleware, async (req, res) => {
     const { id } = req.params;
 
     const result = await pool.query(
-      `SELECT image_url FROM generations WHERE id = $1`,
-      [id]
+      `
+      SELECT image_url, image_key
+      FROM generations
+      WHERE id = $1
+      AND user_id = $2
+      `,
+      [id, req.user.id]
     );
 
     if (!result.rows.length) {
       return res.status(404).json({ error: "image not found" });
     }
 
-    const imageUrl = result.rows[0].image_url;
+    const key = getGeneratedImageKey(result.rows[0]);
 
-    const key = imageUrl.split(".r2.dev/")[1];
+    if (!key) {
+      return res.status(404).json({ error: "image not found" });
+    }
 
-    const s3 = new S3Client({
-      region: "auto",
-      endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-      credentials: {
-        accessKeyId: process.env.R2_ACCESS_KEY,
-        secretAccessKey: process.env.R2_SECRET_KEY,
-      },
-    });
-
-    const object = await s3.send(
-      new GetObjectCommand({
-        Bucket: process.env.R2_BUCKET,
-        Key: key
-      })
-    );
+    const object = await getObjectFromR2ByKey(key);
 
     const chunks = [];
     for await (const chunk of object.Body) {
@@ -4372,68 +4533,66 @@ app.get("/api/download-video/:key", async (req, res) => {
 });
 
 // ======================================
-// AUTO CLEANUP OLD GENERATIONS (30 days)
+// AUTO CLEANUP OLD GENERATIONS (17 days)
 // ======================================
 
 async function cleanupOldGenerations() {
   try {
 
     const result = await pool.query(`
-      DELETE FROM generations
+      SELECT id, image_url, image_key, video_url
+      FROM generations
       WHERE liked = false
-      AND created_at < NOW() - interval '30 days'
-      RETURNING image_url, video_url
+      AND created_at < NOW() - interval '17 days'
     `);
 
     if (!result.rows.length) {
-      console.log("🧹 cleanup: nothing to delete");
+      console.log("cleanup: nothing to delete");
       return;
     }
 
-    const s3 = new S3Client({
-      region: "auto",
-      endpoint: process.env.R2_ENDPOINT,
-      credentials: {
-        accessKeyId: process.env.R2_ACCESS_KEY,
-        secretAccessKey: process.env.R2_SECRET_KEY,
-      },
-    });
+    let deletedCount = 0;
 
     for (const row of result.rows) {
+      try {
+        const urls = [row.image_url, row.video_url].filter(Boolean);
 
-  const urls = [row.image_url, row.video_url].filter(Boolean);
+        for (const url of urls) {
+          let key;
 
-  for (const url of urls) {
+          if (url.includes("/api/download-video/")) {
+            key = "videos/" + url.split("/api/download-video/")[1];
+          } else {
+            key = getGeneratedImageKey(row);
+            if (!key) throw new Error("invalid_generated_image_key");
+          }
 
-    let key;
+          await deleteFromR2ByKey(key);
+        }
 
-    if (url.includes("/api/download-video/")) {
-      key = "videos/" + url.split("/api/download-video/")[1];
-    } else {
-      const parts = url.split(".r2.dev/");
-      if (parts.length < 2) continue;
-      key = parts[1];
+        await pool.query(
+          `DELETE FROM generations WHERE id = $1`,
+          [row.id]
+        );
+
+        deletedCount += 1;
+
+      } catch (e) {
+        console.error("CLEANUP GENERATION DELETE ERROR:", {
+          id: row.id,
+          error: e?.message || e
+        });
+      }
     }
 
-    await s3.send(
-      new DeleteObjectCommand({
-        Bucket: process.env.R2_BUCKET,
-        Key: key
-      })
-    );
-
-  }
-
-}
-
-console.log("🧹 deleted generations:", result.rows.length);
+    console.log("deleted generations:", deletedCount);
 
   } catch (err) {
     console.error("CLEANUP ERROR:", err);
   }
 }
-
 setInterval(cleanupOldGenerations, 24 * 60 * 60 * 1000);
+setInterval(cleanupQueuedR2Objects, 24 * 60 * 60 * 1000);
 
 // ======================================
 // AUTO VERIFY EMAIL REMINDERS
