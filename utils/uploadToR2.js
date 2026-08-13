@@ -106,6 +106,26 @@ export async function uploadPromptImagePreviewToR2(buffer, userId, uploadId) {
   };
 }
 
+export async function uploadVideoToR2WithKey(buffer) {
+  const id = crypto.randomUUID();
+  const key = `videos/${id}.mp4`;
+
+  await s3.send(
+    new PutObjectCommand({
+      Bucket: process.env.R2_BUCKET,
+      Key: key,
+      Body: buffer,
+      ContentType: "video/mp4",
+    })
+  );
+
+  return {
+    key,
+    videoKey: id,
+    url: `https://api.dizain.pro/api/download-video/${id}.mp4`
+  };
+}
+
 export async function deletePromptImageFromR2(key) {
   await s3.send(
     new DeleteObjectCommand({

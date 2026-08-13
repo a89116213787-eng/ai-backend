@@ -11,10 +11,10 @@ import axios from "axios";
 import dotenv from "dotenv";
 import { sendMail } from "./src/services/mailClient.js";
 import { verifyEmailTemplate } from "./src/templates/emails/verifyEmailTemplate.js";
-import { uploadToR2, uploadToR2WithKey, uploadPromptImageToR2, uploadPromptImagePreviewToR2, deletePromptImageFromR2, deleteFromR2ByKey, getObjectFromR2ByKey } from "./utils/uploadToR2.js";
+import { uploadToR2, uploadToR2WithKey, uploadPromptImageToR2, uploadPromptImagePreviewToR2, uploadVideoToR2WithKey, deletePromptImageFromR2, deleteFromR2ByKey, getObjectFromR2ByKey } from "./utils/uploadToR2.js";
 import sharp from "sharp";
 import Replicate from "replicate";
-import { S3Client, GetObjectCommand, PutObjectCommand, DeleteObjectCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
+import { S3Client, DeleteObjectCommand } from "@aws-sdk/client-s3";
 import deleteImageRoute from "./delete-image.js";
 import multer from "multer";
 import TelegramBot from "node-telegram-bot-api";
@@ -623,7 +623,7 @@ try {
   }
 
   const files = await client.query(
-    `SELECT image_url, image_key, video_url FROM generations WHERE user_id = $1`,
+    `SELECT image_url, image_key, video_url, video_key FROM generations WHERE user_id = $1`,
     [userId]
   );
 
@@ -638,7 +638,7 @@ try {
       cleanupKeys.set(imageKey, "generated_image");
     }
 
-    const videoKey = getGeneratedVideoKey(row.video_url);
+    const videoKey = getGeneratedVideoKey(row.video_key) || getGeneratedVideoKey(row.video_url);
 
     if (row.video_url && !videoKey) {
       throw new Error("invalid_generated_video_key");
@@ -3062,6 +3062,69 @@ function getGeneratedVideoKey(videoUrl) {
   return null;
 }
 
+function getVideoSigningSecret() {
+  const secret = process.env.VIDEO_URL_SECRET;
+
+  if (!secret) {
+    console.error("VIDEO URL SIGNING CONFIG ERROR: VIDEO_URL_SECRET is not set");
+    return null;
+  }
+
+  return secret;
+}
+
+function getVideoAccessKey(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  if (isGeneratedVideoKey(value)) {
+    return value;
+  }
+
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.mp4$/i.test(value)) {
+    return `videos/${value}`;
+  }
+
+  return getGeneratedVideoKey(value);
+}
+
+function signVideoAccessUrl(objectKey, exp) {
+  const secret = getVideoSigningSecret();
+
+  if (!secret) {
+    return null;
+  }
+
+  return crypto
+    .createHmac("sha256", secret)
+    .update(`${objectKey}:${exp}`)
+    .digest("hex");
+}
+
+function getVideoFileNameFromKey(objectKey) {
+  if (!isGeneratedVideoKey(objectKey)) {
+    return null;
+  }
+
+  return objectKey.slice("videos/".length);
+}
+
+function timingSafeEqualString(a, b) {
+  if (typeof a !== "string" || typeof b !== "string") {
+    return false;
+  }
+
+  const left = Buffer.from(a);
+  const right = Buffer.from(b);
+
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  return crypto.timingSafeEqual(left, right);
+}
+
 function getAvatarKey(avatarUrl) {
   if (typeof avatarUrl !== "string") {
     return null;
@@ -4406,30 +4469,8 @@ if (!arrayBuffer || arrayBuffer.byteLength < 1000) {
 
 const buffer = Buffer.from(arrayBuffer);
 
-      // создаём R2 клиент
-const s3 = new S3Client({
-  region: "auto",
-  endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-  credentials: {
-    accessKeyId: process.env.R2_ACCESS_KEY,
-    secretAccessKey: process.env.R2_SECRET_KEY
-  }
-});
-
-// загружаем в R2 как mp4
-const key = `videos/${crypto.randomUUID()}.mp4`;
-
-await s3.send(
-  new PutObjectCommand({
-    Bucket: process.env.R2_BUCKET,
-    Key: key,
-    Body: buffer,
-    ContentType: "video/mp4"
-  })
-);
-
-// получаем имя файла
-const videoKey = key.split("videos/")[1];
+const uploadedVideo = await uploadVideoToR2WithKey(buffer);
+const videoKey = uploadedVideo.videoKey;
 
 // 🔥 получаем userId
 const userId = req.user.id;
@@ -4438,17 +4479,45 @@ const userId = req.user.id;
 const prompt = req.body.prompt || "video generation";
 
 // 🔥 сохраняем в БД
-await pool.query(
-  `
-  INSERT INTO generations (user_id, prompt, video_url)
-  VALUES ($1, $2, $3)
-  `,
-  [
-    userId,
-    prompt,
-    `https://api.dizain.pro/api/download-video/${videoKey}`
-  ]
-);
+try {
+  await pool.query(
+    `
+    INSERT INTO generations (user_id, prompt, video_url, video_key)
+    VALUES ($1, $2, $3, $4)
+    `,
+    [
+      userId,
+      prompt,
+      uploadedVideo.url,
+      uploadedVideo.key
+    ]
+  );
+} catch (e) {
+  try {
+    await pool.query(
+      `
+      INSERT INTO r2_cleanup_queue (object_key, object_type, last_error)
+      VALUES ($1, $2, $3)
+      ON CONFLICT (object_key) DO NOTHING
+      `,
+      [
+        uploadedVideo.key,
+        "generated_video",
+        "video_generation_db_insert_failed"
+      ]
+    );
+  } catch (queueError) {
+    console.error("VIDEO CLEANUP QUEUE INSERT ERROR:", queueError?.message || queueError);
+
+    try {
+      await deleteFromR2ByKey(uploadedVideo.key);
+    } catch (deleteError) {
+      console.error("VIDEO IMMEDIATE CLEANUP ERROR:", deleteError?.message || deleteError);
+    }
+  }
+
+  throw e;
+}
 
 // кэш
 videoCache.set(id, videoKey);
@@ -4478,6 +4547,76 @@ return res.json({
 
 });
 
+app.post("/api/video/access", authMiddleware, async (req, res) => {
+  try {
+    const objectKey = getVideoAccessKey(req.body?.key);
+
+    if (!objectKey) {
+      return res.status(400).json({
+        ok: false,
+        error: "invalid_video_key"
+      });
+    }
+
+    const fileName = getVideoFileNameFromKey(objectKey);
+
+    if (!fileName) {
+      return res.status(400).json({
+        ok: false,
+        error: "invalid_video_key"
+      });
+    }
+
+    const legacyUrl = `https://api.dizain.pro/api/download-video/${fileName}`;
+    const owner = await pool.query(
+      `
+      SELECT id
+      FROM generations
+      WHERE user_id = $1
+      AND (
+        video_key = $2
+        OR (
+          video_key IS NULL
+          AND video_url = $3
+        )
+      )
+      LIMIT 1
+      `,
+      [req.user.id, objectKey, legacyUrl]
+    );
+
+    if (!owner.rows.length) {
+      return res.status(403).json({
+        ok: false,
+        error: "not_owned"
+      });
+    }
+
+    const exp = Math.floor(Date.now() / 1000) + 5 * 60;
+    const sig = signVideoAccessUrl(objectKey, exp);
+
+    if (!sig) {
+      return res.status(500).json({
+        ok: false,
+        error: "video_signing_not_configured"
+      });
+    }
+
+    return res.json({
+      ok: true,
+      url: `https://api.dizain.pro/api/download-video/${fileName}?exp=${exp}&sig=${sig}`,
+      expiresAt: exp
+    });
+  } catch (e) {
+    console.error("VIDEO ACCESS ERROR:", e);
+
+    return res.status(500).json({
+      ok: false,
+      error: "video_access_failed"
+    });
+  }
+});
+
 // ======================================================
 // 🎬 VIDEO DOWNLOAD (R2 → USER)
 // ======================================================
@@ -4487,22 +4626,34 @@ app.get("/api/download-video/:key", async (req, res) => {
   try {
 
     const { key } = req.params;
+    const objectKey = `videos/${key}`;
+    const exp = Number(req.query.exp);
+    const sig = typeof req.query.sig === "string" ? req.query.sig : null;
 
-    const s3 = new S3Client({
-      region: "auto",
-      endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-      credentials: {
-        accessKeyId: process.env.R2_ACCESS_KEY,
-        secretAccessKey: process.env.R2_SECRET_KEY
-      }
-    });
+    if (!isGeneratedVideoKey(objectKey) || !Number.isFinite(exp) || !sig) {
+      return res.status(403).json({
+        ok: false,
+        error: "invalid_video_signature"
+      });
+    }
 
-    const object = await s3.send(
-      new GetObjectCommand({
-        Bucket: process.env.R2_BUCKET,
-        Key: `videos/${key}`
-      })
-    );
+    if (exp < Math.floor(Date.now() / 1000)) {
+      return res.status(403).json({
+        ok: false,
+        error: "video_signature_expired"
+      });
+    }
+
+    const expectedSig = signVideoAccessUrl(objectKey, exp);
+
+    if (!expectedSig || !timingSafeEqualString(sig, expectedSig)) {
+      return res.status(403).json({
+        ok: false,
+        error: "invalid_video_signature"
+      });
+    }
+
+    const object = await getObjectFromR2ByKey(objectKey);
 
     const chunks = [];
 
@@ -4540,7 +4691,7 @@ async function cleanupOldGenerations() {
   try {
 
     const result = await pool.query(`
-      SELECT id, image_url, image_key, video_url
+      SELECT id, image_url, image_key, video_url, video_key
       FROM generations
       WHERE liked = false
       AND created_at < NOW() - interval '17 days'
@@ -4555,18 +4706,29 @@ async function cleanupOldGenerations() {
 
     for (const row of result.rows) {
       try {
-        const urls = [row.image_url, row.video_url].filter(Boolean);
+        const keys = [];
 
-        for (const url of urls) {
-          let key;
+        if (row.image_url) {
+          const imageKey = getGeneratedImageKey(row);
 
-          if (url.includes("/api/download-video/")) {
-            key = "videos/" + url.split("/api/download-video/")[1];
-          } else {
-            key = getGeneratedImageKey(row);
-            if (!key) throw new Error("invalid_generated_image_key");
+          if (!imageKey) {
+            throw new Error("invalid_generated_image_key");
           }
 
+          keys.push(imageKey);
+        }
+
+        if (row.video_url) {
+          const videoKey = getGeneratedVideoKey(row.video_key) || getGeneratedVideoKey(row.video_url);
+
+          if (!videoKey) {
+            throw new Error("invalid_generated_video_key");
+          }
+
+          keys.push(videoKey);
+        }
+
+        for (const key of keys) {
           await deleteFromR2ByKey(key);
         }
 
