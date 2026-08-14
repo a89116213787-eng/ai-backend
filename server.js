@@ -5,7 +5,6 @@ import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import fs from "fs";
 import path from "path";
-import { pipeline } from "stream/promises";
 import express from "express";
 import cors from "cors";
 import axios from "axios";
@@ -3025,45 +3024,6 @@ async function deleteGeneratedImageObject(row) {
 
   await deleteFromR2ByKey(key);
 }
-
-app.get("/api/history-thumb/i/:filename", async (req, res) => {
-  try {
-    const objectKey = `i/${req.params.filename}`;
-
-    if (!isGeneratedImageKey(objectKey)) {
-      return res.status(400).json({
-        ok: false,
-        error: "invalid_image_key"
-      });
-    }
-
-    const object = await getObjectFromR2ByKey(objectKey);
-    const thumbnail = sharp()
-      .resize({
-        width: 640,
-        height: 640,
-        fit: "inside",
-        withoutEnlargement: true
-      })
-      .webp({ quality: 70 });
-
-    res.setHeader("Content-Type", "image/webp");
-    res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
-
-    await pipeline(object.Body, thumbnail, res);
-  } catch (e) {
-    console.error("HISTORY THUMB ERROR:", e);
-
-    if (!res.headersSent) {
-      res.status(500).json({
-        ok: false,
-        error: "history_thumb_failed"
-      });
-    } else {
-      res.destroy();
-    }
-  }
-});
 
 function isGeneratedVideoKey(key) {
   if (typeof key !== "string") return false;
