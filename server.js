@@ -11,7 +11,7 @@ import axios from "axios";
 import dotenv from "dotenv";
 import { sendMail } from "./src/services/mailClient.js";
 import { verifyEmailTemplate } from "./src/templates/emails/verifyEmailTemplate.js";
-import { uploadToR2, uploadToR2WithKey, uploadPromptImageToR2, uploadPromptImagePreviewToR2, uploadVideoToR2WithKey, deletePromptImageFromR2, deleteFromR2ByKey, getObjectFromR2ByKey } from "./utils/uploadToR2.js";
+import { uploadToR2, uploadToR2WithKey, uploadPromptImageToR2, uploadPromptImagePreviewToR2, uploadVideoToR2WithKey, deleteFromR2ByKey, getObjectFromR2ByKey } from "./utils/uploadToR2.js";
 import sharp from "sharp";
 import Replicate from "replicate";
 import { S3Client, DeleteObjectCommand } from "@aws-sdk/client-s3";
@@ -2908,12 +2908,47 @@ app.post("/api/user/update-profile", authMiddleware, async (req, res) => {
 // ======================================================
 
 app.post("/api/workspace/save", authMiddleware, async (req, res) => {
+  const client = await pool.connect();
+  let armedPromptCleanupKeys = [];
+
   try {
-
     const userId = req.user.id;
-    const { data } = req.body;
+    const { data, armPromptCleanupKeys } = req.body;
 
-    await pool.query(
+    if (armPromptCleanupKeys !== undefined && !Array.isArray(armPromptCleanupKeys)) {
+      return res.status(400).json({ ok: false, error: "invalid_cleanup_keys" });
+    }
+
+    const rawArmPromptCleanupKeys = armPromptCleanupKeys || [];
+    const validArmPromptCleanupKeys = rawArmPromptCleanupKeys.filter((key) => {
+      const keyParts = typeof key === "string" ? getPromptImageKeyParts(key) : null;
+      return keyParts && keyParts.owner === String(userId);
+    });
+
+    if (rawArmPromptCleanupKeys.length !== validArmPromptCleanupKeys.length) {
+      return res.status(400).json({ ok: false, error: "invalid_cleanup_keys" });
+    }
+
+    armedPromptCleanupKeys = Array.from(new Set(validArmPromptCleanupKeys));
+    const expectedPromptCleanupTypes = new Map(
+      armedPromptCleanupKeys.map((key) => {
+        const keyParts = getPromptImageKeyParts(key);
+        return [
+          key,
+          keyParts?.variant === "preview" ? "prompt_preview" : "prompt_image"
+        ];
+      })
+    );
+
+    await client.query("BEGIN");
+
+    const currentWorkspaceResult = await client.query(
+      `SELECT data FROM workspaces WHERE user_id = $1`,
+      [userId]
+    );
+    const currentWorkspaceData = currentWorkspaceResult.rows[0]?.data || null;
+
+    await client.query(
       `
       INSERT INTO workspaces (user_id, data)
       VALUES ($1, $2)
@@ -2925,14 +2960,79 @@ app.post("/api/workspace/save", authMiddleware, async (req, res) => {
       [userId, data]
     );
 
+    if (armedPromptCleanupKeys.length > 0) {
+      await client.query(
+        `
+        UPDATE r2_cleanup_queue
+        SET object_type = CASE
+          WHEN object_type = 'prompt_image_pending' THEN 'prompt_image'
+          WHEN object_type = 'prompt_preview_pending' THEN 'prompt_preview'
+          ELSE object_type
+        END
+        WHERE object_key = ANY($1::text[])
+          AND object_type IN ('prompt_image_pending', 'prompt_preview_pending')
+        `,
+        [armedPromptCleanupKeys]
+      );
+
+      const verifyResult = await client.query(
+        `
+        SELECT object_key, object_type
+        FROM r2_cleanup_queue
+        WHERE object_key = ANY($1::text[])
+        `,
+        [armedPromptCleanupKeys]
+      );
+      const actualPromptCleanupTypes = new Map(
+        verifyResult.rows.map((row) => [row.object_key, row.object_type])
+      );
+      const allKeysArmed = armedPromptCleanupKeys.every((key) => {
+        const actualType = actualPromptCleanupTypes.get(key);
+
+        if (actualType === expectedPromptCleanupTypes.get(key)) {
+          return true;
+        }
+
+        if (actualType) {
+          return false;
+        }
+
+        return (
+          !workspaceReferencesPromptKey(currentWorkspaceData, key) &&
+          !workspaceReferencesPromptKey(data, key)
+        );
+      });
+
+      if (!allKeysArmed) {
+        await client.query("ROLLBACK");
+        return res.status(409).json({
+          ok: false,
+          error: "cleanup_not_armed"
+        });
+      }
+    }
+
+    await client.query("COMMIT");
+
+    if (armedPromptCleanupKeys.length > 0) {
+      void cleanupQueuedR2Objects(armedPromptCleanupKeys).catch((error) => {
+        console.error("PROMPT IMAGE ARMED CLEANUP ERROR:", error);
+      });
+    }
+
     res.json({ ok: true });
 
   } catch (e) {
+    try {
+      await client.query("ROLLBACK");
+    } catch {}
 
     console.error("WORKSPACE SAVE ERROR:", e);
 
     res.status(500).json({ ok: false });
 
+  } finally {
+    client.release();
   }
 });
 
@@ -2983,6 +3083,15 @@ function getPromptImageKeyParts(key) {
     uploadId: match[2],
     variant: match[3] ? "preview" : "original"
   };
+}
+
+function workspaceReferencesPromptKey(data, key) {
+  const cards = Array.isArray(data?.cards) ? data.cards : [];
+
+  return cards.some((card) =>
+    card?.type === "prompt" &&
+    (card?.imageKey === key || card?.previewImageKey === key)
+  );
 }
 
 function isGeneratedImageKey(key) {
@@ -3179,22 +3288,35 @@ async function enqueueR2CleanupKeys(client, cleanupKeys) {
 
 async function cleanupQueuedR2Objects(objectKeys = null) {
   try {
+    const armedObjectTypes = [
+      "generated_image",
+      "generated_video",
+      "prompt_image",
+      "prompt_preview",
+      "avatar",
+      "legacy_prompt_image",
+      "legacy_workspace_video"
+    ];
+
     const result = Array.isArray(objectKeys) && objectKeys.length
       ? await pool.query(
         `
         SELECT id, object_key
         FROM r2_cleanup_queue
         WHERE object_key = ANY($1::text[])
+          AND object_type = ANY($2::text[])
         ORDER BY created_at ASC
         `,
-        [objectKeys]
+        [objectKeys, armedObjectTypes]
       )
       : await pool.query(
         `
         SELECT id, object_key
         FROM r2_cleanup_queue
+        WHERE object_type = ANY($1::text[])
         ORDER BY created_at ASC
-        `
+        `,
+        [armedObjectTypes]
       );
 
     for (const row of result.rows) {
@@ -3245,7 +3367,18 @@ app.post("/api/prompt-card/delete-image", authMiddleware, async (req, res) => {
       });
     }
 
-    await deletePromptImageFromR2(key);
+    const objectType = keyParts.variant === "preview"
+      ? "prompt_preview_pending"
+      : "prompt_image_pending";
+
+    await pool.query(
+      `
+      INSERT INTO r2_cleanup_queue (object_key, object_type)
+      VALUES ($1, $2)
+      ON CONFLICT (object_key) DO NOTHING
+      `,
+      [key, objectType]
+    );
 
     res.json({ ok: true });
 
@@ -3254,6 +3387,74 @@ app.post("/api/prompt-card/delete-image", authMiddleware, async (req, res) => {
     res.status(500).json({
       ok: false,
       error: "delete_failed"
+    });
+  }
+});
+
+app.post("/api/prompt-card/cleanup-abandoned-upload", authMiddleware, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { key } = req.body;
+
+    if (typeof key !== "string" || !isPromptImageKey(key)) {
+      return res.status(400).json({
+        ok: false,
+        error: "invalid_key"
+      });
+    }
+
+    const keyParts = getPromptImageKeyParts(key);
+
+    if (!keyParts || keyParts.owner !== String(userId)) {
+      return res.status(403).json({
+        ok: false,
+        error: "not_owned"
+      });
+    }
+
+    const workspaceResult = await pool.query(
+      `SELECT data FROM workspaces WHERE user_id = $1`,
+      [userId]
+    );
+    const workspaceCards = Array.isArray(workspaceResult.rows[0]?.data?.cards)
+      ? workspaceResult.rows[0].data.cards
+      : [];
+    const hasWorkspaceReference = workspaceCards.some((card) =>
+      card?.type === "prompt" &&
+      (card?.imageKey === key || card?.previewImageKey === key)
+    );
+
+    if (hasWorkspaceReference) {
+      return res.status(409).json({
+        ok: false,
+        error: "workspace_reference_exists"
+      });
+    }
+
+    const objectType = keyParts.variant === "preview"
+      ? "prompt_preview"
+      : "prompt_image";
+
+    await pool.query(
+      `
+      INSERT INTO r2_cleanup_queue (object_key, object_type)
+      VALUES ($1, $2)
+      ON CONFLICT (object_key) DO NOTHING
+      `,
+      [key, objectType]
+    );
+
+    void cleanupQueuedR2Objects([key]).catch((error) => {
+      console.error("PROMPT ABANDONED UPLOAD CLEANUP ERROR:", error);
+    });
+
+    res.json({ ok: true });
+
+  } catch (e) {
+    console.error("PROMPT ABANDONED UPLOAD CLEANUP ERROR:", e);
+    res.status(500).json({
+      ok: false,
+      error: "cleanup_failed"
     });
   }
 });
