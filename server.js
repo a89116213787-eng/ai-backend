@@ -14,7 +14,6 @@ import { verifyEmailTemplate } from "./src/templates/emails/verifyEmailTemplate.
 import { uploadToR2, uploadToR2WithKey, uploadPromptImageToR2, uploadPromptImagePreviewToR2, uploadVideoToR2WithKey, deleteFromR2ByKey, getObjectFromR2ByKey } from "./utils/uploadToR2.js";
 import sharp from "sharp";
 import Replicate from "replicate";
-import { S3Client, DeleteObjectCommand } from "@aws-sdk/client-s3";
 import deleteImageRoute from "./delete-image.js";
 import multer from "multer";
 import TelegramBot from "node-telegram-bot-api";
@@ -2810,6 +2809,8 @@ app.post("/api/upload-image", authMiddleware, uploadPromptImageFile, async (req,
 // 🖼 ЗАГРУЗКА АВАТАРА R2
 // =========================
 app.post("/api/user/upload-avatar", authMiddleware, upload.single("file"), async (req, res) => {
+  let newAvatarKey = null;
+
   try {
     const file = req.file;
 
@@ -2819,9 +2820,14 @@ app.post("/api/user/upload-avatar", authMiddleware, upload.single("file"), async
     );
 
     const oldAvatar = userRes.rows[0]?.avatar_url;
+    const oldAvatarKey = oldAvatar ? getAvatarKey(oldAvatar) : null;
 
     if (!file) {
       return res.status(400).json({ ok: false, error: "no file" });
+    }
+
+    if (oldAvatar && !oldAvatarKey) {
+      return res.status(500).json({ ok: false, error: "invalid_avatar_key" });
     }
 
     // 🔥 конвертация + адаптивное сжатие
@@ -2835,43 +2841,46 @@ app.post("/api/user/upload-avatar", authMiddleware, upload.single("file"), async
       .webp({ quality: 85 })
       .toBuffer();
 
-    // 🔥 удаляем старый аватар
-    if (oldAvatar) {
-      try {
-
-        const key = new URL(oldAvatar).pathname.slice(1);
-
-        const s3 = new S3Client({
-          region: "auto",
-          endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-          credentials: {
-            accessKeyId: process.env.R2_ACCESS_KEY,
-            secretAccessKey: process.env.R2_SECRET_KEY,
-          },
-        });
-
-        await s3.send(
-          new DeleteObjectCommand({
-            Bucket: process.env.R2_BUCKET,
-            Key: key,
-          })
-        );
-
-        console.log("OLD AVATAR DELETED:", key);
-
-      } catch (err) {
-        console.error("DELETE OLD AVATAR ERROR:", err);
-      }
-    }
-
     // 🔥 загрузка в R2
-    const url = await uploadToR2(webp, "avatars");
+    const uploadedAvatar = await uploadToR2WithKey(webp, "avatars");
+    const url = uploadedAvatar.url;
+    newAvatarKey = uploadedAvatar.key;
 
     // 🔥 сохраняем в БД
-    await pool.query(
-      "UPDATE users SET avatar_url = $1 WHERE id = $2",
-      [url, req.user.id]
-    );
+    const client = await pool.connect();
+
+    try {
+      await client.query("BEGIN");
+
+      await client.query(
+        "UPDATE users SET avatar_url = $1 WHERE id = $2",
+        [url, req.user.id]
+      );
+
+      if (oldAvatarKey) {
+        await enqueueR2CleanupKeys(client, new Map([[oldAvatarKey, "avatar"]]));
+      }
+
+      await client.query("COMMIT");
+    } catch (e) {
+      await client.query("ROLLBACK");
+
+      await enqueueR2CleanupKeys(pool, new Map([[newAvatarKey, "avatar"]]));
+
+      void cleanupQueuedR2Objects([newAvatarKey]).catch((cleanupError) => {
+        console.error("NEW AVATAR CLEANUP ERROR:", cleanupError);
+      });
+
+      throw e;
+    } finally {
+      client.release();
+    }
+
+    if (oldAvatarKey) {
+      void cleanupQueuedR2Objects([oldAvatarKey]).catch((cleanupError) => {
+        console.error("OLD AVATAR CLEANUP ERROR:", cleanupError);
+      });
+    }
 
     return res.json({
       ok: true,
