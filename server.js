@@ -667,9 +667,25 @@ try {
     cleanupKeys.set(avatarKey, "avatar");
   }
 
+  const assistantAttachments = await client.query(
+    `SELECT object_key FROM assistant_attachments WHERE user_id = $1`,
+    [userId]
+  );
+
+  for (const row of assistantAttachments.rows) {
+    const keyParts = getAssistantAttachmentKeyParts(row.object_key);
+
+    if (!keyParts || keyParts.owner !== String(userId)) {
+      throw new Error("invalid_assistant_attachment_key");
+    }
+
+    cleanupKeys.set(row.object_key, "assistant_attachment");
+  }
+
   await enqueueR2CleanupKeys(client, cleanupKeys);
 
   await client.query(`DELETE FROM generations WHERE user_id = $1`, [userId]);
+  await client.query(`DELETE FROM assistant_attachments WHERE user_id = $1`, [userId]);
   await client.query(`DELETE FROM assistant_messages WHERE user_id = $1`, [userId]);
   await client.query(`DELETE FROM subscriptions WHERE user_id = $1`, [userId]);
   await client.query(`DELETE FROM token_logs WHERE user_id = $1`, [userId]);
@@ -2113,12 +2129,42 @@ ok:false
       storage: multer.memoryStorage()
     });
 
+    const assistantImageUpload = multer({
+      storage: multer.memoryStorage(),
+      limits: {
+        fileSize: 1024 * 1024,
+        files: 3
+      }
+    });
+
     const promptImageUpload = multer({
       storage: multer.memoryStorage(),
       limits: {
         fileSize: 2 * 1024 * 1024
       }
     });
+
+    function uploadAssistantImages(req, res, next) {
+      assistantImageUpload.array("images", 3)(req, res, (err) => {
+        if (!err) {
+          next();
+          return;
+        }
+
+        if (err.code === "LIMIT_FILE_SIZE") {
+          res.status(413).json({
+            ok: false,
+            error: "file_too_large"
+          });
+          return;
+        }
+
+        res.status(400).json({
+          ok: false,
+          error: "invalid_file"
+        });
+      });
+    }
 
     function uploadPromptImageFile(req, res, next) {
       promptImageUpload.single("file")(req, res, (err) => {
@@ -2429,18 +2475,55 @@ app.get("/api/assistant/history", authMiddleware, async (req, res) => {
 
     const result = await pool.query(
       `
-      SELECT role, content, created_at
-      FROM assistant_messages
-      WHERE user_id = $1
+      SELECT id, role, content, created_at
+      FROM (
+        SELECT id, role, content, created_at
+        FROM assistant_messages
+        WHERE user_id = $1
+        ORDER BY created_at DESC
+        LIMIT 30
+      ) latest_messages
       ORDER BY created_at ASC
-      LIMIT 30
       `,
       [userId]
     );
 
+    const messageIds = result.rows.map(row => row.id);
+    const attachmentsByMessageId = new Map();
+
+    if (messageIds.length > 0) {
+      const attachments = await pool.query(
+        `
+        SELECT id, message_id, mime_type, width, height
+        FROM assistant_attachments
+        WHERE user_id = $1
+          AND message_id = ANY($2::int[])
+        ORDER BY message_id ASC, display_order ASC, id ASC
+        `,
+        [userId, messageIds]
+      );
+
+      for (const attachment of attachments.rows) {
+        const list = attachmentsByMessageId.get(attachment.message_id) || [];
+
+        list.push({
+          id: attachment.id,
+          url: `/api/assistant/attachment/${attachment.id}`,
+          mimeType: attachment.mime_type,
+          width: attachment.width,
+          height: attachment.height
+        });
+
+        attachmentsByMessageId.set(attachment.message_id, list);
+      }
+    }
+
     res.json({
       ok: true,
-      messages: result.rows
+      messages: result.rows.map(row => ({
+        ...row,
+        attachments: attachmentsByMessageId.get(row.id) || []
+      }))
     });
 
   } catch (e) {
@@ -2457,12 +2540,73 @@ app.get("/api/assistant/history", authMiddleware, async (req, res) => {
 
 
 // отправка сообщения ассистенту
-app.post("/api/assistant", authMiddleware, upload.array("images",3), async (req, res) => {
+app.get("/api/assistant/attachment/:id", authMiddleware, async (req, res) => {
+  try {
+    const attachmentId = Number(req.params.id);
+
+    if (!Number.isInteger(attachmentId) || attachmentId <= 0) {
+      return res.status(400).json({
+        ok: false,
+        error: "invalid_attachment"
+      });
+    }
+
+    const result = await pool.query(
+      `
+      SELECT object_key, mime_type
+      FROM assistant_attachments
+      WHERE id = $1
+        AND user_id = $2
+      `,
+      [attachmentId, req.user.id]
+    );
+
+    if (!result.rows.length) {
+      return res.status(404).json({
+        ok: false,
+        error: "attachment_not_found"
+      });
+    }
+
+    const keyParts = getAssistantAttachmentKeyParts(result.rows[0].object_key);
+
+    if (!keyParts || keyParts.owner !== String(req.user.id)) {
+      return res.status(404).json({
+        ok: false,
+        error: "attachment_not_found"
+      });
+    }
+
+    const object = await getObjectFromR2ByKey(result.rows[0].object_key);
+    const chunks = [];
+
+    for await (const chunk of object.Body) {
+      chunks.push(chunk);
+    }
+
+    const buffer = Buffer.concat(chunks);
+
+    res.setHeader("Content-Type", result.rows[0].mime_type || "image/webp");
+    res.setHeader("Cache-Control", "private, max-age=300");
+
+    res.send(buffer);
+  } catch (e) {
+    console.error("ASSISTANT ATTACHMENT ERROR:", e);
+
+    res.status(500).json({
+      ok: false,
+      error: "attachment_failed"
+    });
+  }
+});
+
+app.post("/api/assistant", authMiddleware, uploadAssistantImages, async (req, res) => {
 
   try {
 
     const { message } = req.body;
     const userId = req.user.id;
+    const files = Array.isArray(req.files) ? req.files : [];
 
     const parts = [];
 
@@ -2518,14 +2662,84 @@ const isAdmin = req.user.role === "admin" || user.rows[0]?.admin_subscription;
 
     }
 
+    let preparedAttachments;
+
+    try {
+      preparedAttachments = await Promise.all(
+        files.map(file => prepareAssistantAttachment(file))
+      );
+    } catch (e) {
+      return res.status(400).json({
+        ok: false,
+        error: e?.message || "invalid_assistant_attachment"
+      });
+    }
+
     // сохраняем сообщение пользователя
-    await pool.query(
-      `
-      INSERT INTO assistant_messages (user_id, role, content)
-      VALUES ($1, 'user', $2)
-      `,
-      [userId, message]
-    );
+    const client = await pool.connect();
+    const uploadedAttachmentKeys = [];
+
+    try {
+      await client.query("BEGIN");
+
+      const userMessageResult = await client.query(
+        `
+        INSERT INTO assistant_messages (user_id, role, content)
+        VALUES ($1, 'user', $2)
+        RETURNING id
+        `,
+        [userId, message]
+      );
+
+      const userMessageId = userMessageResult.rows[0].id;
+
+      for (let index = 0; index < preparedAttachments.length; index += 1) {
+        const attachment = preparedAttachments[index];
+        const uploaded = await uploadToR2WithKey(
+          attachment.webpBuffer,
+          `assistant-attachments/${userId}`
+        );
+
+        uploadedAttachmentKeys.push(uploaded.key);
+
+        await client.query(
+          `
+          INSERT INTO assistant_attachments
+            (message_id, user_id, object_key, mime_type, size_bytes, width, height, display_order)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          `,
+          [
+            userMessageId,
+            userId,
+            uploaded.key,
+            "image/webp",
+            attachment.sizeBytes,
+            attachment.width,
+            attachment.height,
+            index
+          ]
+        );
+      }
+
+      await client.query("COMMIT");
+    } catch (e) {
+      await client.query("ROLLBACK");
+
+      if (uploadedAttachmentKeys.length > 0) {
+        await enqueueR2CleanupKeys(
+          pool,
+          new Map(uploadedAttachmentKeys.map(key => [key, "assistant_attachment"]))
+        );
+
+        void cleanupQueuedR2Objects(uploadedAttachmentKeys).catch((cleanupError) => {
+          console.error("ASSISTANT ATTACHMENT PERSISTENCE CLEANUP ERROR:", cleanupError);
+        });
+      }
+
+      throw e;
+    } finally {
+      client.release();
+    }
 
     // ===============================
 // 🤖 ЗАПРОС В GEMINI
@@ -2675,18 +2889,17 @@ VALUES ($1, 'assistant', $2)
 // ===============================
 // 🧹 ОЧИСТКА СТАРЫХ СООБЩЕНИЙ (оставляем 30)
 // ===============================
-await pool.query(
-`
-DELETE FROM assistant_messages
-WHERE id IN (
-  SELECT id FROM assistant_messages
-  WHERE user_id = $1
-  ORDER BY created_at DESC
-  OFFSET 30
-)
-`,
-[userId]
-);
+try {
+  const queuedAssistantAttachmentKeys = await cleanupOldAssistantMessages(userId);
+
+  if (queuedAssistantAttachmentKeys.length > 0) {
+    void cleanupQueuedR2Objects(queuedAssistantAttachmentKeys).catch((error) => {
+      console.error("ASSISTANT ATTACHMENT CLEANUP ERROR:", error);
+    });
+  }
+} catch (cleanupError) {
+  console.error("ASSISTANT MESSAGE RETENTION CLEANUP ERROR:", cleanupError);
+}
 
 res.end();
 
@@ -3262,6 +3475,152 @@ function getAvatarKey(avatarUrl) {
   return null;
 }
 
+function getAssistantAttachmentKeyParts(key) {
+  if (typeof key !== "string") {
+    return null;
+  }
+
+  const match = key.match(
+    /^assistant-attachments\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.webp$/i
+  );
+
+  if (!match) {
+    return null;
+  }
+
+  return {
+    owner: match[1],
+    id: match[2]
+  };
+}
+
+async function prepareAssistantAttachment(file) {
+  const allowedMimeTypes = new Set([
+    "image/jpeg",
+    "image/png",
+    "image/webp"
+  ]);
+
+  if (!file || !allowedMimeTypes.has(file.mimetype)) {
+    throw new Error("invalid_assistant_attachment_type");
+  }
+
+  let metadata;
+
+  try {
+    metadata = await sharp(file.buffer).metadata();
+  } catch {
+    throw new Error("invalid_assistant_attachment_image");
+  }
+
+  if (!metadata.width || !metadata.height) {
+    throw new Error("invalid_assistant_attachment_dimensions");
+  }
+
+  if (metadata.width > 4096 || metadata.height > 4096) {
+    throw new Error("assistant_attachment_too_large_dimensions");
+  }
+
+  const webpBuffer = await sharp(file.buffer)
+    .rotate()
+    .resize({
+      width: 1600,
+      height: 1600,
+      fit: "inside",
+      withoutEnlargement: true
+    })
+    .webp({ quality: 85 })
+    .toBuffer();
+
+  const storedMetadata = await sharp(webpBuffer).metadata();
+
+  return {
+    webpBuffer,
+    sizeBytes: webpBuffer.length,
+    width: storedMetadata.width,
+    height: storedMetadata.height
+  };
+}
+
+async function cleanupOldAssistantMessages(userId) {
+  const client = await pool.connect();
+  const queuedKeys = [];
+
+  try {
+    await client.query("BEGIN");
+
+    const oldMessages = await client.query(
+      `
+      SELECT id
+      FROM assistant_messages
+      WHERE user_id = $1
+      ORDER BY created_at DESC
+      OFFSET 30
+      `,
+      [userId]
+    );
+
+    const messageIds = oldMessages.rows.map(row => row.id);
+
+    if (messageIds.length === 0) {
+      await client.query("COMMIT");
+      return queuedKeys;
+    }
+
+    const attachments = await client.query(
+      `
+      SELECT object_key
+      FROM assistant_attachments
+      WHERE user_id = $1
+        AND message_id = ANY($2::int[])
+      `,
+      [userId, messageIds]
+    );
+
+    const cleanupKeys = new Map();
+
+    for (const row of attachments.rows) {
+      const keyParts = getAssistantAttachmentKeyParts(row.object_key);
+
+      if (!keyParts || keyParts.owner !== String(userId)) {
+        throw new Error("invalid_assistant_attachment_key");
+      }
+
+      cleanupKeys.set(row.object_key, "assistant_attachment");
+      queuedKeys.push(row.object_key);
+    }
+
+    await enqueueR2CleanupKeys(client, cleanupKeys);
+
+    await client.query(
+      `
+      DELETE FROM assistant_attachments
+      WHERE user_id = $1
+        AND message_id = ANY($2::int[])
+      `,
+      [userId, messageIds]
+    );
+
+    await client.query(
+      `
+      DELETE FROM assistant_messages
+      WHERE user_id = $1
+        AND id = ANY($2::int[])
+      `,
+      [userId, messageIds]
+    );
+
+    await client.query("COMMIT");
+
+    return queuedKeys;
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
 function collectPromptCardCleanupKeys(data, userId, cleanupKeys) {
   const cards = Array.isArray(data?.cards) ? data.cards : [];
 
@@ -3303,6 +3662,7 @@ async function cleanupQueuedR2Objects(objectKeys = null) {
       "prompt_image",
       "prompt_preview",
       "avatar",
+      "assistant_attachment",
       "legacy_prompt_image",
       "legacy_workspace_video"
     ];
