@@ -5095,7 +5095,7 @@ videoCache.set(id, videoKey);
 return res.json({
   ok: true,
   status: "done",
-  video: `https://api.dizain.pro/api/download-video/${videoKey}`
+  video: uploadedVideo.url
 });
 
     }
