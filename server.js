@@ -5006,7 +5006,7 @@ app.get("/api/video-status/:id", authMiddleware, async (req, res) => {
       return res.json({
         ok: true,
         status: "done",
-        video: `https://api.dizain.pro/api/download-video/${videoKey}`
+        video: `https://api.dizain.pro/api/download-video/${videoKey}.mp4`
       });
     }
 
