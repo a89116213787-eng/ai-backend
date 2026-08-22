@@ -3918,6 +3918,8 @@ app.post("/api/generation/like", authMiddleware, async (req, res) => {
 // PASSWORD RESET — REQUEST
 // ======================================================
 app.post("/api/auth/forgot-password", async (req, res) => {
+  let client;
+
   try {
     const { email } = req.body;
 
@@ -3946,11 +3948,28 @@ app.post("/api/auth/forgot-password", async (req, res) => {
     // срок жизни — 30 минут
     const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
 
-    await pool.query(
+    client = await pool.connect();
+    await client.query("BEGIN");
+
+    await client.query(
+      "SELECT id FROM users WHERE id = $1 FOR UPDATE",
+      [userId]
+    );
+
+    await client.query(
+      "DELETE FROM password_resets WHERE user_id = $1",
+      [userId]
+    );
+
+    await client.query(
       `INSERT INTO password_resets (user_id, token, expires_at)
        VALUES ($1, $2, $3)`,
       [userId, token, expiresAt]
     );
+
+    await client.query("COMMIT");
+    client.release();
+    client = null;
 
     // 📧 отправляем письмо
     await sendMail({
@@ -3973,6 +3992,16 @@ app.post("/api/auth/forgot-password", async (req, res) => {
       message: "If user exists, reset instructions sent",
     });
   } catch (e) {
+    if (client) {
+      try {
+        await client.query("ROLLBACK");
+      } catch (rollbackError) {
+        console.error("FORGOT PASSWORD ROLLBACK ERROR:", rollbackError);
+      } finally {
+        client.release();
+      }
+    }
+
     console.error("FORGOT PASSWORD ERROR:", e);
     return res.status(500).json({
       ok: false,
@@ -3985,6 +4014,8 @@ app.post("/api/auth/forgot-password", async (req, res) => {
 // PASSWORD RESET — CONFIRM
 // ======================================================
 app.post("/api/auth/reset-password", async (req, res) => {
+  let client;
+
   try {
     const { token, newPassword } = req.body;
 
@@ -3995,41 +4026,65 @@ app.post("/api/auth/reset-password", async (req, res) => {
       });
     }
 
-    const result = await pool.query(
+    client = await pool.connect();
+    await client.query("BEGIN");
+
+    const result = await client.query(
       `SELECT user_id, expires_at
        FROM password_resets
-       WHERE token = $1`,
+       WHERE token = $1
+       FOR UPDATE`,
       [token]
     );
 
     if (result.rows.length === 0) {
+      await client.query("ROLLBACK");
+      client.release();
+      client = null;
       return res.status(400).json({ ok: false, error: "invalid token" });
     }
 
     const reset = result.rows[0];
 
     if (new Date(reset.expires_at) < new Date()) {
+      await client.query("ROLLBACK");
+      client.release();
+      client = null;
       return res.status(400).json({ ok: false, error: "token expired" });
     }
 
     const passwordHash = await bcrypt.hash(newPassword, 10);
 
-    await pool.query(
+    await client.query(
       "UPDATE users SET password_hash = $1 WHERE id = $2",
       [passwordHash, reset.user_id]
     );
 
     // удаляем токен после использования
-    await pool.query(
-      "DELETE FROM password_resets WHERE token = $1",
-      [token]
+    await client.query(
+      "DELETE FROM password_resets WHERE user_id = $1",
+      [reset.user_id]
     );
+
+    await client.query("COMMIT");
+    client.release();
+    client = null;
 
     return res.json({
       ok: true,
       message: "password updated",
     });
   } catch (e) {
+    if (client) {
+      try {
+        await client.query("ROLLBACK");
+      } catch (rollbackError) {
+        console.error("RESET PASSWORD ROLLBACK ERROR:", rollbackError);
+      } finally {
+        client.release();
+      }
+    }
+
     console.error("RESET PASSWORD ERROR:", e);
     res.status(500).json({ ok: false, error: "reset-password failed" });
   }
