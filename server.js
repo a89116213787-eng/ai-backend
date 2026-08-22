@@ -3838,7 +3838,7 @@ app.get("/api/user/generations", authMiddleware, async (req, res) => {
       SELECT *
       FROM (
         (
-          SELECT id, prompt, image_url, video_url, created_at
+          SELECT id, prompt, image_url, video_url, liked, created_at
           FROM generations
           WHERE user_id = $1
           AND image_url IS NOT NULL
@@ -3849,7 +3849,7 @@ app.get("/api/user/generations", authMiddleware, async (req, res) => {
         UNION ALL
 
        (
-          SELECT id, prompt, image_url, video_url, created_at
+          SELECT id, prompt, image_url, video_url, liked, created_at
           FROM generations
           WHERE user_id = $1
           AND video_url IS NOT NULL
@@ -3882,7 +3882,7 @@ app.get("/api/user/generations", authMiddleware, async (req, res) => {
 app.post("/api/generation/like", authMiddleware, async (req, res) => {
   try {
 
-    const { id } = req.body;
+    const { id, liked } = req.body;
 
     if (!id) {
       return res.status(400).json({
@@ -3891,14 +3891,28 @@ app.post("/api/generation/like", authMiddleware, async (req, res) => {
       });
     }
 
-    await pool.query(
+    if (typeof liked !== "boolean") {
+      return res.status(400).json({
+        ok: false,
+        error: "liked boolean required"
+      });
+    }
+
+    const result = await pool.query(
       `
       UPDATE generations
-      SET liked = true
-      WHERE id = $1 AND user_id = $2
+      SET liked = $1
+      WHERE id = $2 AND user_id = $3
       `,
-      [id, req.user.id]
+      [liked, id, req.user.id]
     );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({
+        ok: false,
+        error: "generation_not_found"
+      });
+    }
 
     res.json({ ok: true });
 
