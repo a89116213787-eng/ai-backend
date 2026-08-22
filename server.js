@@ -3960,7 +3960,7 @@ app.post("/api/auth/forgot-password", async (req, res) => {
         <h2>Сброс пароля</h2>
         <p>Перейдите по ссылке:</p>
         <p>
-          <a href="https://dizain.pro/reset-password?token=${token}">
+          <a href="https://dizain.pro/auth/reset-password?token=${token}">
             Сбросить пароль
           </a>
         </p>
