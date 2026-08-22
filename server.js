@@ -990,7 +990,7 @@ app.post("/api/auth/register", async (req, res) => {
           to: emailNormalized,
           subject: "Подтверждение почты — ДизАiн",
           html: verifyEmailTemplate(
-            `https://dizain.pro/api/auth/verify-email?token=${verifyToken}`,
+            `https://api.dizain.pro/api/auth/verify-email?token=${verifyToken}`,
             emailNormalized
           )
         });
@@ -1327,7 +1327,7 @@ app.post("/api/auth/register", async (req, res) => {
           to: emailNormalized,
           subject: "Подтверждение почты — ДизАiн",
           html: verifyEmailTemplate(
-            `https://dizain.pro/api/auth/verify-email?token=${verifyToken}`,
+            `https://api.dizain.pro/api/auth/verify-email?token=${verifyToken}`,
             emailNormalized
           )
         });
@@ -5364,7 +5364,7 @@ async function sendVerificationReminders() {
           to: user.email,
          subject: "Подтверждение почты — ДизАiн",
           html: verifyEmailTemplate(
-          `https://dizain.pro/api/auth/verify-email?token=${user.email_verify_token}`,
+          `https://api.dizain.pro/api/auth/verify-email?token=${user.email_verify_token}`,
           user.email
         )
         });
@@ -5394,7 +5394,7 @@ async function sendVerificationReminders() {
           to: user.email,
           subject: "Подтверждение почты — ДизАiн",
           html: verifyEmailTemplate(
-          `https://dizain.pro/api/auth/verify-email?token=${user.email_verify_token}`,
+          `https://api.dizain.pro/api/auth/verify-email?token=${user.email_verify_token}`,
           user.email
         )
         });
