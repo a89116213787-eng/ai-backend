@@ -5921,6 +5921,183 @@ app.post("/api/payments/yookassa-webhook", async (req, res) => {
   try {
     const event = req.body;
 
+    if (event.event === "payment.canceled") {
+      const webhookPaymentId = nonEmptyString(event.object?.id);
+
+      if (!webhookPaymentId) {
+        logYooKassaWebhookDiagnostic("missing_canceled_webhook_payment_id");
+        return res.json({ ok: true, ignored: true });
+      }
+
+      let yookassaResponse;
+
+      try {
+        yookassaResponse = await axios.get(
+          `https://api.yookassa.ru/v3/payments/${encodeURIComponent(webhookPaymentId)}`,
+          {
+            auth: {
+              username: process.env.YOOKASSA_SHOP_ID,
+              password: process.env.YOOKASSA_SECRET_KEY
+            },
+            timeout: YOOKASSA_PAYMENT_GET_TIMEOUT_MS,
+            validateStatus: () => true
+          }
+        );
+      } catch (lookupError) {
+        logYooKassaWebhookDiagnostic("canceled_yookassa_payment_lookup_unavailable", {
+          code: lookupError.code || "unknown"
+        });
+        return res.status(503).json({ ok: false });
+      }
+
+      if (yookassaResponse.status === 401 || yookassaResponse.status === 403) {
+        logYooKassaWebhookDiagnostic("canceled_yookassa_auth_failed", {
+          status: yookassaResponse.status
+        });
+        return res.status(500).json({ ok: false });
+      }
+
+      if (yookassaResponse.status === 404 || yookassaResponse.status >= 500) {
+        logYooKassaWebhookDiagnostic("canceled_yookassa_payment_lookup_temporary_failure", {
+          status: yookassaResponse.status
+        });
+        return res.status(503).json({ ok: false });
+      }
+
+      if (yookassaResponse.status !== 200) {
+        logYooKassaWebhookDiagnostic("canceled_yookassa_payment_lookup_failed", {
+          status: yookassaResponse.status
+        });
+        return res.status(502).json({ ok: false });
+      }
+
+      const paymentObject = yookassaResponse.data;
+      const verifiedPaymentId = nonEmptyString(paymentObject?.id);
+      const metadataPaymentId = nonEmptyString(paymentObject?.metadata?.payment_id);
+      const metadataUserId = nonEmptyString(paymentObject?.metadata?.user_id);
+      const verifiedAmountKopecks = parseRubToKopecks(paymentObject?.amount?.value);
+
+      if (
+        verifiedPaymentId !== webhookPaymentId ||
+        paymentObject?.status !== "canceled" ||
+        paymentObject?.amount?.currency !== "RUB" ||
+        !metadataPaymentId ||
+        !metadataUserId ||
+        verifiedAmountKopecks === null
+      ) {
+        logYooKassaWebhookDiagnostic("canceled_verified_payment_validation_failed");
+        return res.json({ ok: true, ignored: true });
+      }
+
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(metadataPaymentId)) {
+        logYooKassaWebhookDiagnostic("canceled_invalid_metadata_payment_id");
+        return res.json({ ok: true, ignored: true });
+      }
+
+      let paymentId = metadataPaymentId;
+
+      let result = await pool.query(
+        "SELECT * FROM payments WHERE id = $1",
+        [paymentId]
+      );
+
+      if (result.rows.length === 0) {
+        result = await pool.query(
+          "SELECT * FROM payments WHERE external_id = $1",
+          [verifiedPaymentId]
+        );
+
+        if (result.rows.length === 0) {
+          logYooKassaWebhookDiagnostic("canceled_payment_not_found");
+          return res.json({ ok: true, ignored: true });
+        }
+      }
+
+      const payment = result.rows[0];
+      paymentId = payment.id;
+      const dbAmountKopecks = parseRubToKopecks(payment.amount);
+
+      if (
+        String(payment.id) !== metadataPaymentId ||
+        String(payment.user_id) !== metadataUserId ||
+        (payment.external_id !== null && payment.external_id !== verifiedPaymentId) ||
+        payment.provider !== "yookassa" ||
+        dbAmountKopecks === null ||
+        dbAmountKopecks !== verifiedAmountKopecks
+      ) {
+        logYooKassaWebhookDiagnostic("canceled_payment_database_validation_failed");
+        return res.json({ ok: true, ignored: true });
+      }
+
+      const client = await pool.connect();
+
+      try {
+        await client.query("BEGIN");
+
+        const lockedPaymentResult = await client.query(
+          "SELECT * FROM payments WHERE id = $1 FOR UPDATE",
+          [paymentId]
+        );
+
+        if (lockedPaymentResult.rows.length === 0) {
+          await client.query("ROLLBACK");
+          logYooKassaWebhookDiagnostic("canceled_locked_payment_not_found");
+          return res.json({ ok: true, ignored: true });
+        }
+
+        const lockedPayment = lockedPaymentResult.rows[0];
+        const lockedDbAmountKopecks = parseRubToKopecks(lockedPayment.amount);
+
+        if (
+          String(lockedPayment.id) !== metadataPaymentId ||
+          String(lockedPayment.user_id) !== metadataUserId ||
+          (lockedPayment.external_id !== null && lockedPayment.external_id !== verifiedPaymentId) ||
+          lockedPayment.provider !== "yookassa" ||
+          lockedDbAmountKopecks === null ||
+          lockedDbAmountKopecks !== verifiedAmountKopecks
+        ) {
+          await client.query("ROLLBACK");
+          logYooKassaWebhookDiagnostic("canceled_locked_payment_validation_failed");
+          return res.json({ ok: true, ignored: true });
+        }
+
+        if (lockedPayment.external_id === null) {
+          const externalIdUpdate = await client.query(
+            `UPDATE payments
+             SET external_id = $1
+             WHERE id = $2 AND external_id IS NULL`,
+            [verifiedPaymentId, paymentId]
+          );
+
+          if (externalIdUpdate.rowCount !== 1) {
+            throw new Error("payment_canceled_external_id_recovery_failed");
+          }
+        }
+
+        if (lockedPayment.status === "paid") {
+          await client.query("COMMIT");
+          return res.json({ ok: true, alreadyPaid: true });
+        }
+
+        const paymentUpdate = await client.query(
+          "UPDATE payments SET status = 'canceled' WHERE id = $1",
+          [paymentId]
+        );
+
+        if (paymentUpdate.rowCount !== 1) {
+          throw new Error("payment_canceled_update_failed");
+        }
+
+        await client.query("COMMIT");
+        return res.json({ ok: true });
+      } catch (transactionError) {
+        await client.query("ROLLBACK");
+        throw transactionError;
+      } finally {
+        client.release();
+      }
+    }
+
     // интересует только успешная оплата
     if (event.event !== "payment.succeeded") {
       return res.json({ ok: true });
