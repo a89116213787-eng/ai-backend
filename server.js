@@ -389,22 +389,78 @@ const KLING_MODELS = {
 // ==================
 // JWT MIDDLEWARE
 // ==================
-function authMiddleware(req, res, next) {
+async function authMiddleware(req, res, next) {
+  let payload;
+
   try {
     const header = req.headers.authorization;
 
-    if (!header) {
+    if (!header || typeof header !== "string" || !header.startsWith("Bearer ")) {
       return res.status(401).json({ ok: false, error: "no token" });
     }
 
-    const token = header.replace("Bearer ", "");
-    const payload = jwt.verify(token, process.env.JWT_SECRET);
+    const token = header.slice("Bearer ".length).trim();
 
-    req.user = payload;
-    next();
+    if (!token) {
+      return res.status(401).json({ ok: false, error: "no token" });
+    }
+
+    payload = jwt.verify(token, process.env.JWT_SECRET);
   } catch (e) {
     return res.status(401).json({ ok: false, error: "invalid token" });
   }
+
+  if (!payload || typeof payload !== "object" || !payload.id) {
+    return res.status(401).json({ ok: false, error: "invalid token" });
+  }
+
+  const tokenSessionVersion = Number.isInteger(payload.session_version)
+    ? payload.session_version
+    : 0;
+
+  let userResult;
+
+  try {
+    userResult = await pool.query(
+      `
+      SELECT id, email, role, email_verified, session_version
+      FROM users
+      WHERE id = $1
+      `,
+      [payload.id]
+    );
+  } catch (e) {
+    console.error("AUTH USER LOOKUP ERROR:", e);
+    return res.status(503).json({
+      ok: false,
+      error: "auth_unavailable"
+    });
+  }
+
+  if (!userResult.rows.length) {
+    return res.status(401).json({ ok: false, error: "invalid token" });
+  }
+
+  const dbUser = userResult.rows[0];
+
+  if (dbUser.email_verified !== true) {
+    return res.status(403).json({
+      ok: false,
+      error: "email_not_verified"
+    });
+  }
+
+  if (tokenSessionVersion !== dbUser.session_version) {
+    return res.status(401).json({ ok: false, error: "invalid token" });
+  }
+
+  req.user = {
+    id: dbUser.id,
+    email: dbUser.email,
+    role: dbUser.role
+  };
+
+  next();
 }
 
 import paymentsRouter from "./payments.js";
@@ -936,7 +992,7 @@ app.post("/api/auth/register", async (req, res) => {
         email_verify_expires
       )
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-      RETURNING id, email, role
+      RETURNING id, email, role, session_version
       `,
       [
         emailNormalized,
@@ -978,6 +1034,7 @@ app.post("/api/auth/register", async (req, res) => {
         id: user.id,
         email: user.email,
         role: user.role,
+        session_version: user.session_version,
       },
       process.env.JWT_SECRET,
       { expiresIn: "7d" }
@@ -1367,7 +1424,8 @@ app.post("/api/auth/register", async (req, res) => {
         email,
         password_hash,
         role,
-        email_verified
+        email_verified,
+        session_version
       FROM users
       WHERE email = $1
       `,
@@ -1402,7 +1460,12 @@ app.post("/api/auth/register", async (req, res) => {
     }
 
     const token = jwt.sign(
-      { id: user.id, email: user.email, role: user.role },
+      {
+        id: user.id,
+        email: user.email,
+        role: user.role,
+        session_version: user.session_version
+      },
       process.env.JWT_SECRET,
       { expiresIn: "7d" }
     );
@@ -4165,7 +4228,12 @@ app.post("/api/auth/reset-password", async (req, res) => {
     const passwordHash = await bcrypt.hash(newPassword, 10);
 
     await client.query(
-      "UPDATE users SET password_hash = $1 WHERE id = $2",
+      `
+      UPDATE users
+      SET password_hash = $1,
+          session_version = session_version + 1
+      WHERE id = $2
+      `,
       [passwordHash, reset.user_id]
     );
 
