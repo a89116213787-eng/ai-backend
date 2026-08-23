@@ -4089,6 +4089,51 @@ app.post("/api/generation/like", authMiddleware, async (req, res) => {
 // ======================================================
 // PASSWORD RESET — REQUEST
 // ======================================================
+const PASSWORD_RESET_TOKEN_TTL_MS = 30 * 60 * 1000;
+const FORGOT_PASSWORD_RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
+const FORGOT_PASSWORD_RATE_LIMIT_MAX = 5;
+const forgotPasswordRateLimit = new Map();
+
+function getForgotPasswordRateLimitKey(req) {
+  const forwardedFor = req.headers["x-forwarded-for"];
+  if (typeof forwardedFor === "string" && forwardedFor.trim()) {
+    return forwardedFor.split(",")[0].trim();
+  }
+
+  return req.ip || req.socket?.remoteAddress || "unknown";
+}
+
+function isForgotPasswordRateLimited(req) {
+  const now = Date.now();
+  const key = getForgotPasswordRateLimitKey(req);
+
+  for (const [entryKey, entry] of forgotPasswordRateLimit.entries()) {
+    if (entry.resetAt <= now) {
+      forgotPasswordRateLimit.delete(entryKey);
+    }
+  }
+
+  const entry = forgotPasswordRateLimit.get(key);
+  if (!entry) {
+    forgotPasswordRateLimit.set(key, {
+      count: 1,
+      resetAt: now + FORGOT_PASSWORD_RATE_LIMIT_WINDOW_MS,
+    });
+    return false;
+  }
+
+  if (entry.count >= FORGOT_PASSWORD_RATE_LIMIT_MAX) {
+    return true;
+  }
+
+  entry.count += 1;
+  return false;
+}
+
+function hashResetToken(rawToken) {
+  return crypto.createHash("sha256").update(rawToken).digest("hex");
+}
+
 app.post("/api/auth/forgot-password", async (req, res) => {
   let client;
 
@@ -4097,6 +4142,13 @@ app.post("/api/auth/forgot-password", async (req, res) => {
 
     if (!email) {
       return res.status(400).json({ ok: false, error: "email required" });
+    }
+
+    if (isForgotPasswordRateLimited(req)) {
+      return res.status(429).json({
+        ok: false,
+        error: "too_many_requests",
+      });
     }
 
     const result = await pool.query(
@@ -4116,12 +4168,17 @@ app.post("/api/auth/forgot-password", async (req, res) => {
 
     // генерируем токен
     const token = crypto.randomBytes(32).toString("hex");
+    const tokenHash = hashResetToken(token);
 
     // срок жизни — 30 минут
-    const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
+    const expiresAt = new Date(Date.now() + PASSWORD_RESET_TOKEN_TTL_MS);
 
     client = await pool.connect();
     await client.query("BEGIN");
+
+    await client.query(
+      "DELETE FROM password_resets WHERE expires_at < NOW()"
+    );
 
     await client.query(
       "SELECT id FROM users WHERE id = $1 FOR UPDATE",
@@ -4136,7 +4193,7 @@ app.post("/api/auth/forgot-password", async (req, res) => {
     await client.query(
       `INSERT INTO password_resets (user_id, token, expires_at)
        VALUES ($1, $2, $3)`,
-      [userId, token, expiresAt]
+      [userId, tokenHash, expiresAt]
     );
 
     await client.query("COMMIT");
@@ -4198,15 +4255,17 @@ app.post("/api/auth/reset-password", async (req, res) => {
       });
     }
 
+    const tokenHash = hashResetToken(token);
+
     client = await pool.connect();
     await client.query("BEGIN");
 
     const result = await client.query(
       `SELECT user_id, expires_at
        FROM password_resets
-       WHERE token = $1
+       WHERE token = $1 OR token = $2
        FOR UPDATE`,
-      [token]
+      [tokenHash, token]
     );
 
     if (result.rows.length === 0) {
