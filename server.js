@@ -2144,6 +2144,73 @@ ok:false
       }
     });
 
+    const AVATAR_MAX_FILE_SIZE = 5 * 1024 * 1024;
+    const AVATAR_MAX_WIDTH = 12000;
+    const AVATAR_MAX_HEIGHT = 12000;
+    const AVATAR_MAX_PIXELS = 60_000_000;
+
+    const avatarUpload = multer({
+      storage: multer.memoryStorage(),
+      limits: {
+        fileSize: AVATAR_MAX_FILE_SIZE,
+        files: 1,
+        fields: 0
+      },
+      fileFilter: (req, file, cb) => {
+        if (file.mimetype !== "image/webp") {
+          const error = new Error("invalid_avatar_mime");
+          error.code = "INVALID_AVATAR_MIME";
+          cb(error);
+          return;
+        }
+
+        cb(null, true);
+      }
+    });
+
+    function uploadAvatarFile(req, res, next) {
+      avatarUpload.single("file")(req, res, (err) => {
+        if (!err) {
+          next();
+          return;
+        }
+
+        if (err instanceof multer.MulterError) {
+          if (err.code === "LIMIT_FILE_SIZE") {
+            return res.status(413).json({
+              ok: false,
+              error: "file_too_large"
+            });
+          }
+
+          if (
+            err.code === "LIMIT_FILE_COUNT" ||
+            err.code === "LIMIT_FIELD_COUNT" ||
+            err.code === "LIMIT_UNEXPECTED_FILE"
+          ) {
+            return res.status(400).json({
+              ok: false,
+              error: "invalid_upload"
+            });
+          }
+        }
+
+        if (err?.code === "INVALID_AVATAR_MIME") {
+          return res.status(400).json({
+            ok: false,
+            error: "invalid_image"
+          });
+        }
+
+        console.error("AVATAR MULTER ERROR:", err);
+
+        return res.status(400).json({
+          ok: false,
+          error: "invalid_upload"
+        });
+      });
+    }
+
     function uploadAssistantImages(req, res, next) {
       assistantImageUpload.array("images", 3)(req, res, (err) => {
         if (!err) {
@@ -3021,7 +3088,7 @@ app.post("/api/upload-image", authMiddleware, uploadPromptImageFile, async (req,
 // =========================
 // 🖼 ЗАГРУЗКА АВАТАРА R2
 // =========================
-app.post("/api/user/upload-avatar", authMiddleware, upload.single("file"), async (req, res) => {
+app.post("/api/user/upload-avatar", authMiddleware, uploadAvatarFile, async (req, res) => {
   let newAvatarKey = null;
 
   try {
@@ -3041,6 +3108,34 @@ app.post("/api/user/upload-avatar", authMiddleware, upload.single("file"), async
 
     if (oldAvatar && !oldAvatarKey) {
       return res.status(500).json({ ok: false, error: "invalid_avatar_key" });
+    }
+
+    let metadata;
+
+    try {
+      metadata = await sharp(file.buffer).metadata();
+    } catch {
+      return res.status(400).json({
+        ok: false,
+        error: "invalid_image"
+      });
+    }
+
+    const width = metadata.width;
+    const height = metadata.height;
+    const pixels = width && height ? width * height : 0;
+
+    if (
+      !width ||
+      !height ||
+      width > AVATAR_MAX_WIDTH ||
+      height > AVATAR_MAX_HEIGHT ||
+      pixels > AVATAR_MAX_PIXELS
+    ) {
+      return res.status(400).json({
+        ok: false,
+        error: "image_too_large"
+      });
     }
 
     // 🔥 конвертация + адаптивное сжатие
