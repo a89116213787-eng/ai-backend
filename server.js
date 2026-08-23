@@ -1589,6 +1589,325 @@ app.get("/api/user/me", authMiddleware, async (req, res) => {
   }
 });
 
+const MINI_GAME_STATE_MAX_BYTES = 16 * 1024;
+const MINI_GAME_HEIGHT = 18;
+const MINI_GAME_WIDTH = 10;
+
+function isMiniGameInteger(value, min, max) {
+  return Number.isInteger(value) && value >= min && value <= max;
+}
+
+function isMiniGameColor(value) {
+  return (
+    value === null ||
+    (Array.isArray(value) && value.length === 0) ||
+    (typeof value === "string" && value.length <= 64)
+  );
+}
+
+function isMiniGameCell(cell) {
+  return (
+    cell &&
+    typeof cell === "object" &&
+    isMiniGameInteger(cell.fill, 0, 1) &&
+    isMiniGameColor(cell.color)
+  );
+}
+
+function isMiniGameBlock(block) {
+  if (!block || typeof block !== "object" || !Array.isArray(block.bloco)) {
+    return false;
+  }
+
+  if (block.bloco.length < 2 || block.bloco.length > 4) {
+    return false;
+  }
+
+  if (!isMiniGameColor(block.color)) {
+    return false;
+  }
+
+  return block.bloco.every((row) => (
+    Array.isArray(row) &&
+    row.length >= 2 &&
+    row.length <= 4 &&
+    row.every((cell) => cell === 0 || cell === 1)
+  ));
+}
+
+function isMiniGamePlayer(player) {
+  return (
+    player &&
+    typeof player === "object" &&
+    Array.isArray(player.pos) &&
+    player.pos.length === 2 &&
+    isMiniGameInteger(player.pos[0], 0, MINI_GAME_HEIGHT) &&
+    isMiniGameInteger(player.pos[1], -4, MINI_GAME_WIDTH) &&
+    isMiniGameBlock(player.bloco) &&
+    isMiniGameBlock(player.next)
+  );
+}
+
+function validateMiniGameState(state) {
+  if (!state || typeof state !== "object") {
+    return false;
+  }
+
+  const size = Buffer.byteLength(JSON.stringify(state), "utf8");
+
+  if (size > MINI_GAME_STATE_MAX_BYTES) {
+    return false;
+  }
+
+  if (!Array.isArray(state.map) || state.map.length !== MINI_GAME_HEIGHT) {
+    return false;
+  }
+
+  if (!state.map.every((row) => (
+    Array.isArray(row) &&
+    row.length === MINI_GAME_WIDTH &&
+    row.every(isMiniGameCell)
+  ))) {
+    return false;
+  }
+
+  return (
+    isMiniGamePlayer(state.player) &&
+    isMiniGameInteger(state.score, 0, Number.MAX_SAFE_INTEGER) &&
+    isMiniGameInteger(state.level, 1, 1000) &&
+    isMiniGameInteger(state.lines, 0, Number.MAX_SAFE_INTEGER)
+  );
+}
+
+function isMiniGameBaseRevision(value) {
+  return isMiniGameInteger(value, 0, Number.MAX_SAFE_INTEGER);
+}
+
+app.get("/api/minigame/state", authMiddleware, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `
+      SELECT state, status, revision
+      FROM mini_game_states
+      WHERE user_id = $1
+      `,
+      [req.user.id]
+    );
+
+    const row = result.rows[0];
+
+    if (!row || row.status === "completed") {
+      return res.json({
+        ok: true,
+        state: null,
+        status: row?.status || "none",
+        revision: row?.revision || 0
+      });
+    }
+
+    res.json({
+      ok: true,
+      state: row.state,
+      status: row.status,
+      revision: row.revision
+    });
+  } catch (e) {
+    console.error("MINIGAME STATE LOAD ERROR:", e);
+    res.status(500).json({ ok: false });
+  }
+});
+
+app.post("/api/minigame/state", authMiddleware, async (req, res) => {
+  const client = await pool.connect();
+
+  try {
+    const { state, baseRevision, restart } = req.body;
+    const isRestart = restart === true;
+
+    if (!validateMiniGameState(state) || !isMiniGameBaseRevision(baseRevision)) {
+      return res.status(400).json({
+        ok: false,
+        error: "invalid_minigame_state"
+      });
+    }
+
+    await client.query("BEGIN");
+
+    const current = await client.query(
+      `
+      SELECT status, revision
+      FROM mini_game_states
+      WHERE user_id = $1
+      FOR UPDATE
+      `,
+      [req.user.id]
+    );
+
+    if (!current.rows.length) {
+      if (baseRevision !== 0) {
+        await client.query("ROLLBACK");
+        return res.status(409).json({
+          ok: false,
+          error: "stale_minigame_revision"
+        });
+      }
+
+      const inserted = await client.query(
+        `
+        INSERT INTO mini_game_states (user_id, state, status, revision)
+        VALUES ($1, $2, 'active', 1)
+        RETURNING revision
+        `,
+        [req.user.id, state]
+      );
+
+      await client.query("COMMIT");
+      return res.json({
+        ok: true,
+        revision: inserted.rows[0].revision
+      });
+    }
+
+    const row = current.rows[0];
+
+    if (row.status === "completed" && !isRestart) {
+      await client.query("ROLLBACK");
+      return res.status(409).json({
+        ok: false,
+        error: "minigame_completed"
+      });
+    }
+
+    if (row.revision !== baseRevision) {
+      await client.query("ROLLBACK");
+      return res.status(409).json({
+        ok: false,
+        error: "stale_minigame_revision"
+      });
+    }
+
+    const updated = await client.query(
+      `
+      UPDATE mini_game_states
+      SET state = $1,
+          status = 'active',
+          revision = revision + 1,
+          updated_at = NOW()
+      WHERE user_id = $2
+      RETURNING revision
+      `,
+      [state, req.user.id]
+    );
+
+    await client.query("COMMIT");
+
+    res.json({
+      ok: true,
+      revision: updated.rows[0].revision
+    });
+  } catch (e) {
+    try {
+      await client.query("ROLLBACK");
+    } catch {}
+
+    console.error("MINIGAME STATE SAVE ERROR:", e);
+    res.status(500).json({ ok: false });
+  } finally {
+    client.release();
+  }
+});
+
+app.post("/api/minigame/complete", authMiddleware, async (req, res) => {
+  const client = await pool.connect();
+
+  try {
+    const { state, baseRevision } = req.body;
+
+    if (!validateMiniGameState(state) || !isMiniGameBaseRevision(baseRevision)) {
+      return res.status(400).json({
+        ok: false,
+        error: "invalid_minigame_state"
+      });
+    }
+
+    await client.query("BEGIN");
+
+    const current = await client.query(
+      `
+      SELECT status, revision
+      FROM mini_game_states
+      WHERE user_id = $1
+      FOR UPDATE
+      `,
+      [req.user.id]
+    );
+
+    if (!current.rows.length) {
+      if (baseRevision !== 0) {
+        await client.query("ROLLBACK");
+        return res.status(409).json({
+          ok: false,
+          error: "stale_minigame_revision"
+        });
+      }
+
+      const inserted = await client.query(
+        `
+        INSERT INTO mini_game_states (user_id, state, status, revision)
+        VALUES ($1, $2, 'completed', 1)
+        RETURNING revision
+        `,
+        [req.user.id, state]
+      );
+
+      await client.query("COMMIT");
+      return res.json({
+        ok: true,
+        revision: inserted.rows[0].revision
+      });
+    }
+
+    const row = current.rows[0];
+
+    if (row.revision !== baseRevision) {
+      await client.query("ROLLBACK");
+      return res.status(409).json({
+        ok: false,
+        error: "stale_minigame_revision"
+      });
+    }
+
+    const updated = await client.query(
+      `
+      UPDATE mini_game_states
+      SET state = $1,
+          status = 'completed',
+          revision = revision + 1,
+          updated_at = NOW()
+      WHERE user_id = $2
+      RETURNING revision
+      `,
+      [state, req.user.id]
+    );
+
+    await client.query("COMMIT");
+
+    res.json({
+      ok: true,
+      revision: updated.rows[0].revision
+    });
+  } catch (e) {
+    try {
+      await client.query("ROLLBACK");
+    } catch {}
+
+    console.error("MINIGAME COMPLETE ERROR:", e);
+    res.status(500).json({ ok: false });
+  } finally {
+    client.release();
+  }
+});
+
 app.post("/api/user/onboarding-complete", authMiddleware, async (req, res) => {
   try {
 
