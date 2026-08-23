@@ -6027,7 +6027,7 @@ app.post("/api/payments/yookassa-webhook", async (req, res) => {
     if (
       String(payment.id) !== metadataPaymentId ||
       String(payment.user_id) !== metadataUserId ||
-      payment.external_id !== verifiedPaymentId ||
+      (payment.external_id !== null && payment.external_id !== verifiedPaymentId) ||
       dbAmountKopecks === null ||
       dbAmountKopecks !== verifiedAmountKopecks
     ) {
@@ -6057,7 +6057,7 @@ app.post("/api/payments/yookassa-webhook", async (req, res) => {
       if (
         String(lockedPayment.id) !== metadataPaymentId ||
         String(lockedPayment.user_id) !== metadataUserId ||
-        lockedPayment.external_id !== verifiedPaymentId ||
+        (lockedPayment.external_id !== null && lockedPayment.external_id !== verifiedPaymentId) ||
         lockedPayment.provider !== "yookassa" ||
         lockedDbAmountKopecks === null ||
         lockedDbAmountKopecks !== verifiedAmountKopecks
@@ -6068,6 +6068,19 @@ app.post("/api/payments/yookassa-webhook", async (req, res) => {
       }
 
       // защита от двойного вебхука
+      if (lockedPayment.external_id === null) {
+        const externalIdUpdate = await client.query(
+          `UPDATE payments
+           SET external_id = $1
+           WHERE id = $2 AND external_id IS NULL`,
+          [verifiedPaymentId, paymentId]
+        );
+
+        if (externalIdUpdate.rowCount !== 1) {
+          throw new Error("payment_external_id_recovery_failed");
+        }
+      }
+
       if (lockedPayment.status === "paid") {
         await client.query("COMMIT");
         return res.json({ ok: true, alreadyProcessed: true });
