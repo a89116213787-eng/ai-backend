@@ -4861,7 +4861,8 @@ let spentCost = 0;
   mode,
   quality,
   aspectRatio,
-  imageSize
+  imageSize,
+  generatorId
 } = req.body;
     const { id, role } = req.user;
 
@@ -4954,7 +4955,11 @@ if (
 // ⏱ RATE LIMIT (ПОСЛЕ anti-duplicate)
 // ======================================
 const now = Date.now();
-const last = generationCooldown.get(id);
+const cooldownKey =
+  typeof generatorId === "string" && generatorId.trim()
+    ? `${id}:${generatorId}`
+    : id;
+const last = generationCooldown.get(cooldownKey);
 
 if (last && now - last < GENERATION_DELAY_MS) {
   const wait = Math.ceil((GENERATION_DELAY_MS - (now - last)) / 1000);
@@ -4965,7 +4970,7 @@ if (last && now - last < GENERATION_DELAY_MS) {
   });
 }
 
-generationCooldown.set(id, now);
+generationCooldown.set(cooldownKey, now);
 
 // ===============================
 // 💰 TOKEN COST CALCULATION
