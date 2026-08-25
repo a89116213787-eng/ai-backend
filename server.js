@@ -1908,6 +1908,113 @@ app.post("/api/minigame/complete", authMiddleware, async (req, res) => {
   }
 });
 
+app.post("/api/minigame/reward", authMiddleware, async (req, res) => {
+  const client = await pool.connect();
+
+  try {
+    const { gameRunId, xp } = req.body;
+    const normalizedXp = Math.floor(Number(xp));
+
+    if (
+      typeof gameRunId !== "string" ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(gameRunId) ||
+      !Number.isFinite(normalizedXp) ||
+      normalizedXp < 0
+    ) {
+      return res.status(400).json({
+        ok: false,
+        error: "invalid_minigame_reward"
+      });
+    }
+
+    const milestones = Math.floor(normalizedXp / 1000);
+
+    await client.query("BEGIN");
+
+    const userResult = await client.query(
+      "SELECT tokens FROM users WHERE id = $1 FOR UPDATE",
+      [req.user.id]
+    );
+
+    if (!userResult.rows.length) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({
+        ok: false,
+        error: "user_not_found"
+      });
+    }
+
+    const rewardResult = await client.query(
+      `
+      SELECT game_run_id, rewarded_milestones
+      FROM mini_game_rewards
+      WHERE user_id = $1
+      FOR UPDATE
+      `,
+      [req.user.id]
+    );
+
+    const rewardRow = rewardResult.rows[0];
+    const alreadyRewarded =
+      rewardRow && rewardRow.game_run_id === gameRunId
+        ? rewardRow.rewarded_milestones
+        : 0;
+    const delta = Math.max(0, milestones - alreadyRewarded);
+    let currentTokens = userResult.rows[0].tokens;
+
+    if (delta > 0) {
+      const updatedUser = await client.query(
+        "UPDATE users SET tokens = tokens + $1 WHERE id = $2 RETURNING tokens",
+        [delta, req.user.id]
+      );
+
+      if (updatedUser.rowCount !== 1) {
+        throw new Error("minigame_reward_user_update_failed");
+      }
+
+      currentTokens = updatedUser.rows[0].tokens;
+
+      await client.query(
+        `
+        INSERT INTO token_logs (user_id, change, reason)
+        VALUES ($1, $2, 'mini_game_reward')
+        `,
+        [req.user.id, delta]
+      );
+
+      await client.query(
+        `
+        INSERT INTO mini_game_rewards (user_id, game_run_id, rewarded_milestones)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (user_id)
+        DO UPDATE SET
+          game_run_id = EXCLUDED.game_run_id,
+          rewarded_milestones = EXCLUDED.rewarded_milestones,
+          updated_at = NOW()
+        `,
+        [req.user.id, gameRunId, milestones]
+      );
+    }
+
+    await client.query("COMMIT");
+
+    res.json({
+      ok: true,
+      rewarded: delta,
+      tokens: currentTokens
+    });
+  } catch (e) {
+    try {
+      await client.query("ROLLBACK");
+    } catch {}
+
+    console.error("MINIGAME REWARD ERROR:", e);
+    res.status(500).json({ ok: false });
+  } finally {
+    client.release();
+  }
+});
+
 app.post("/api/user/onboarding-complete", authMiddleware, async (req, res) => {
   try {
 
