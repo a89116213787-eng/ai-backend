@@ -40,6 +40,33 @@ export async function uploadToR2WithKey(buffer, folder = "i") {
   };
 }
 
+export async function uploadGeneratedImagePreviewToR2(buffer, imageKey) {
+
+  const match = String(imageKey).match(/^i\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.webp$/i);
+
+  if (!match) {
+    throw new Error("invalid generated image key");
+  }
+
+  const key = `i/${match[1]}-preview.webp`;
+
+  await s3.send(
+    new PutObjectCommand({
+      Bucket: process.env.R2_BUCKET,
+      Key: key,
+      Body: buffer,
+      ContentType: "image/webp",
+    })
+  );
+
+  const url = `https://pub-4492119d79ef42ebb8609370399fa7b8.r2.dev/${key}`;
+
+  return {
+    url,
+    key
+  };
+}
+
 function getPromptImageOwnerSegment(userId) {
   const owner = String(userId);
 
