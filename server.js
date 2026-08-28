@@ -4252,6 +4252,7 @@ async function cleanupQueuedR2Objects(objectKeys = null) {
   try {
     const armedObjectTypes = [
       "generated_image",
+      "generated_image_preview",
       "generated_video",
       "prompt_image",
       "prompt_preview",
