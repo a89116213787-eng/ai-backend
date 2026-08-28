@@ -11,7 +11,7 @@ import axios from "axios";
 import dotenv from "dotenv";
 import { sendMail } from "./src/services/mailClient.js";
 import { verifyEmailTemplate } from "./src/templates/emails/verifyEmailTemplate.js";
-import { uploadToR2, uploadToR2WithKey, uploadGeneratedImagePreviewToR2, uploadPromptImageToR2, uploadPromptImagePreviewToR2, uploadVideoToR2WithKey, deleteFromR2ByKey, getObjectFromR2ByKey } from "./utils/uploadToR2.js";
+import { uploadToR2, uploadToR2WithKey, uploadPromptImageToR2, uploadPromptImagePreviewToR2, uploadVideoToR2WithKey, deleteFromR2ByKey, getObjectFromR2ByKey } from "./utils/uploadToR2.js";
 import sharp from "sharp";
 import Replicate from "replicate";
 import deleteImageRoute from "./delete-image.js";
@@ -678,7 +678,7 @@ try {
   }
 
   const files = await client.query(
-    `SELECT image_url, image_key, preview_key, video_url, video_key FROM generations WHERE user_id = $1`,
+    `SELECT image_url, image_key, video_url, video_key FROM generations WHERE user_id = $1`,
     [userId]
   );
 
@@ -691,10 +691,6 @@ try {
 
     if (imageKey) {
       cleanupKeys.set(imageKey, "generated_image");
-    }
-
-    if (isGeneratedImagePreviewKey(row.preview_key)) {
-      cleanupKeys.set(row.preview_key, "generated_image_preview");
     }
 
     const videoKey = getGeneratedVideoKey(row.video_key) || getGeneratedVideoKey(row.video_url);
@@ -3911,12 +3907,6 @@ function isGeneratedImageKey(key) {
   return Boolean(match);
 }
 
-function isGeneratedImagePreviewKey(key) {
-  if (typeof key !== "string") return false;
-
-  return /^i\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-preview\.webp$/i.test(key);
-}
-
 function getGeneratedImageKey(row) {
   if (isGeneratedImageKey(row?.image_key)) {
     return row.image_key;
@@ -4432,7 +4422,7 @@ app.get("/api/user/generations", authMiddleware, async (req, res) => {
       SELECT *
       FROM (
         (
-          SELECT id, prompt, image_url, preview_url, video_url, liked, created_at
+          SELECT id, prompt, image_url, video_url, liked, created_at
           FROM generations
           WHERE user_id = $1
           AND image_url IS NOT NULL
@@ -4443,7 +4433,7 @@ app.get("/api/user/generations", authMiddleware, async (req, res) => {
         UNION ALL
 
        (
-          SELECT id, prompt, image_url, preview_url, video_url, liked, created_at
+          SELECT id, prompt, image_url, video_url, liked, created_at
           FROM generations
           WHERE user_id = $1
           AND video_url IS NOT NULL
@@ -5413,58 +5403,17 @@ if (imageBase64) {
     .toBuffer();
 
   const { url: imageUrl, key: imageKey } = await uploadToR2WithKey(webpBuffer);
-  let previewUrl = null;
-  let previewKey = null;
 
-  try {
-    const previewBuffer = await sharp(buffer)
-      .resize({
-        width: 512,
-        height: 512,
-        fit: "inside",
-        withoutEnlargement: true
-      })
-      .webp({ quality: 65 })
-      .toBuffer();
-
-    const preview = await uploadGeneratedImagePreviewToR2(previewBuffer, imageKey);
-    previewUrl = preview.url;
-    previewKey = preview.key;
-  } catch (e) {
-    console.warn("generated image preview failed", e?.message || e);
-  }
-
-  let result;
-
-  try {
-    result = await pool.query(
-  `INSERT INTO generations (user_id, prompt, image_url, image_key, preview_url, preview_key)
-   VALUES ($1, $2, $3, $4, $5, $6)
+  const result = await pool.query(
+  `INSERT INTO generations (user_id, prompt, image_url, image_key)
+   VALUES ($1, $2, $3, $4)
    RETURNING id`,
-  [id, prompt, imageUrl, imageKey, previewUrl, previewKey]
+  [id, prompt, imageUrl, imageKey]
 );
-  } catch (e) {
-    const uploadedKeys = [imageKey, previewKey].filter(Boolean);
-
-    for (const key of uploadedKeys) {
-      try {
-        await deleteFromR2ByKey(key);
-      } catch (cleanupError) {
-        console.error("generated image cleanup after db insert failed", {
-          key,
-          error: cleanupError?.message || cleanupError
-        });
-      }
-    }
-
-    throw e;
-  }
 
   return res.json({
     ok: true,
     image: imageUrl,
-    previewImage: previewUrl,
-    previewImageKey: previewKey,
     id: result.rows[0].id
   });
 }
@@ -6034,7 +5983,7 @@ async function cleanupOldGenerations() {
   try {
 
     const result = await pool.query(`
-      SELECT id, image_url, image_key, preview_key, video_url, video_key
+      SELECT id, image_url, image_key, video_url, video_key
       FROM generations
       WHERE liked = false
       AND created_at < NOW() - interval '17 days'
@@ -6059,10 +6008,6 @@ async function cleanupOldGenerations() {
           }
 
           keys.push(imageKey);
-
-          if (isGeneratedImagePreviewKey(row.preview_key)) {
-            keys.push(row.preview_key);
-          }
         }
 
         if (row.video_url) {
