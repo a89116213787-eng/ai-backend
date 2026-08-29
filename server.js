@@ -4426,7 +4426,6 @@ app.post("/api/prompt-card/cleanup-abandoned-upload", authMiddleware, async (req
 // USER GENERATIONS HISTORY
 app.get("/api/user/generations", authMiddleware, async (req, res) => {
   try {
-    const handlerStartedAt = performance.now();
     const userId = req.user.id;
     const DEFAULT_IMAGE_LIMIT = 150;
     const DEFAULT_PAGED_IMAGE_LIMIT = 24;
@@ -4479,12 +4478,8 @@ app.get("/api/user/generations", authMiddleware, async (req, res) => {
 
     imageParams.push(imageQueryLimit);
 
-    const poolBeforeImage = {
-      total: pool.totalCount,
-      idle: pool.idleCount,
-      waiting: pool.waitingCount,
-    };
-    const imageQuery = `
+    const imageResult = await pool.query(
+      `
       SELECT id, prompt, image_url, preview_url, video_url, liked, created_at
       FROM generations
       WHERE user_id = $1
@@ -4492,38 +4487,9 @@ app.get("/api/user/generations", authMiddleware, async (req, res) => {
       ${cursorWhere}
       ORDER BY created_at DESC, id DESC
       LIMIT $${imageParams.length}
-      `;
-    let imageClient = null;
-    let imageResult;
-    let imageAcquireMs = 0;
-    let imagePingMs = 0;
-    let imageQueryMs = 0;
-    const imageStartedAt = performance.now();
-    const imageAcquireStartedAt = performance.now();
-
-    try {
-      imageClient = await pool.connect();
-      imageAcquireMs = performance.now() - imageAcquireStartedAt;
-
-      const imagePingStartedAt = performance.now();
-      await imageClient.query("SELECT 1");
-      imagePingMs = performance.now() - imagePingStartedAt;
-
-      const imageQueryStartedAt = performance.now();
-      imageResult = await imageClient.query(imageQuery, imageParams);
-      imageQueryMs = performance.now() - imageQueryStartedAt;
-    } finally {
-      if (imageClient) {
-        imageClient.release();
-      }
-    }
-
-    const imageDurationMs = performance.now() - imageStartedAt;
-    const poolAfterImage = {
-      total: pool.totalCount,
-      idle: pool.idleCount,
-      waiting: pool.waitingCount,
-    };
+      `,
+      imageParams
+    );
 
     const hasMoreImages = imageResult.rows.length > imageLimit;
     const imageRows = imageResult.rows.slice(0, imageLimit);
@@ -4535,10 +4501,8 @@ app.get("/api/user/generations", authMiddleware, async (req, res) => {
         }
       : null;
     let videoRows = [];
-    let videoDurationMs = null;
 
     if (includeVideos) {
-      const videoStartedAt = performance.now();
       const videoResult = await pool.query(
         `
         SELECT id, prompt, image_url, preview_url, video_url, liked, created_at
@@ -4550,7 +4514,6 @@ app.get("/api/user/generations", authMiddleware, async (req, res) => {
         `,
         [userId]
       );
-      videoDurationMs = performance.now() - videoStartedAt;
 
       videoRows = videoResult.rows;
     }
@@ -4570,10 +4533,6 @@ app.get("/api/user/generations", authMiddleware, async (req, res) => {
       hasMoreImages,
       nextImageCursor,
     });
-
-    console.log(
-      `[history timing] total=${(performance.now() - handlerStartedAt).toFixed(1)}ms images=${imageDurationMs.toFixed(1)}ms imageAcquire=${imageAcquireMs.toFixed(1)}ms imagePing=${imagePingMs.toFixed(1)}ms imageQuery=${imageQueryMs.toFixed(1)}ms videos=${videoDurationMs === null ? "skipped" : `${videoDurationMs.toFixed(1)}ms`} includeVideos=${includeVideos} imageLimit=${imageLimit} hasCursor=${hasValidCursor} poolBefore=total:${poolBeforeImage.total},idle:${poolBeforeImage.idle},waiting:${poolBeforeImage.waiting} poolAfter=total:${poolAfterImage.total},idle:${poolAfterImage.idle},waiting:${poolAfterImage.waiting}`
-    );
 
   } catch (e) {
     console.error("USER GENERATIONS ERROR:", e);
