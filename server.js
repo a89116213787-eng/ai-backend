@@ -4479,6 +4479,11 @@ app.get("/api/user/generations", authMiddleware, async (req, res) => {
 
     imageParams.push(imageQueryLimit);
 
+    const poolBeforeImage = {
+      total: pool.totalCount,
+      idle: pool.idleCount,
+      waiting: pool.waitingCount,
+    };
     const imageStartedAt = performance.now();
     const imageResult = await pool.query(
       `
@@ -4493,6 +4498,11 @@ app.get("/api/user/generations", authMiddleware, async (req, res) => {
       imageParams
     );
     const imageDurationMs = performance.now() - imageStartedAt;
+    const poolAfterImage = {
+      total: pool.totalCount,
+      idle: pool.idleCount,
+      waiting: pool.waitingCount,
+    };
 
     const hasMoreImages = imageResult.rows.length > imageLimit;
     const imageRows = imageResult.rows.slice(0, imageLimit);
@@ -4541,7 +4551,7 @@ app.get("/api/user/generations", authMiddleware, async (req, res) => {
     });
 
     console.log(
-      `[history timing] total=${(performance.now() - handlerStartedAt).toFixed(1)}ms images=${imageDurationMs.toFixed(1)}ms videos=${videoDurationMs === null ? "skipped" : `${videoDurationMs.toFixed(1)}ms`} includeVideos=${includeVideos} imageLimit=${imageLimit} hasCursor=${hasValidCursor}`
+      `[history timing] total=${(performance.now() - handlerStartedAt).toFixed(1)}ms images=${imageDurationMs.toFixed(1)}ms videos=${videoDurationMs === null ? "skipped" : `${videoDurationMs.toFixed(1)}ms`} includeVideos=${includeVideos} imageLimit=${imageLimit} hasCursor=${hasValidCursor} poolBefore=total:${poolBeforeImage.total},idle:${poolBeforeImage.idle},waiting:${poolBeforeImage.waiting} poolAfter=total:${poolAfterImage.total},idle:${poolAfterImage.idle},waiting:${poolAfterImage.waiting}`
     );
 
   } catch (e) {
