@@ -4496,6 +4496,7 @@ app.get("/api/user/generations", authMiddleware, async (req, res) => {
     let imageClient = null;
     let imageResult;
     let imageAcquireMs = 0;
+    let imagePingMs = 0;
     let imageQueryMs = 0;
     const imageStartedAt = performance.now();
     const imageAcquireStartedAt = performance.now();
@@ -4503,6 +4504,10 @@ app.get("/api/user/generations", authMiddleware, async (req, res) => {
     try {
       imageClient = await pool.connect();
       imageAcquireMs = performance.now() - imageAcquireStartedAt;
+
+      const imagePingStartedAt = performance.now();
+      await imageClient.query("SELECT 1");
+      imagePingMs = performance.now() - imagePingStartedAt;
 
       const imageQueryStartedAt = performance.now();
       imageResult = await imageClient.query(imageQuery, imageParams);
@@ -4567,7 +4572,7 @@ app.get("/api/user/generations", authMiddleware, async (req, res) => {
     });
 
     console.log(
-      `[history timing] total=${(performance.now() - handlerStartedAt).toFixed(1)}ms images=${imageDurationMs.toFixed(1)}ms imageAcquire=${imageAcquireMs.toFixed(1)}ms imageQuery=${imageQueryMs.toFixed(1)}ms videos=${videoDurationMs === null ? "skipped" : `${videoDurationMs.toFixed(1)}ms`} includeVideos=${includeVideos} imageLimit=${imageLimit} hasCursor=${hasValidCursor} poolBefore=total:${poolBeforeImage.total},idle:${poolBeforeImage.idle},waiting:${poolBeforeImage.waiting} poolAfter=total:${poolAfterImage.total},idle:${poolAfterImage.idle},waiting:${poolAfterImage.waiting}`
+      `[history timing] total=${(performance.now() - handlerStartedAt).toFixed(1)}ms images=${imageDurationMs.toFixed(1)}ms imageAcquire=${imageAcquireMs.toFixed(1)}ms imagePing=${imagePingMs.toFixed(1)}ms imageQuery=${imageQueryMs.toFixed(1)}ms videos=${videoDurationMs === null ? "skipped" : `${videoDurationMs.toFixed(1)}ms`} includeVideos=${includeVideos} imageLimit=${imageLimit} hasCursor=${hasValidCursor} poolBefore=total:${poolBeforeImage.total},idle:${poolBeforeImage.idle},waiting:${poolBeforeImage.waiting} poolAfter=total:${poolAfterImage.total},idle:${poolAfterImage.idle},waiting:${poolAfterImage.waiting}`
     );
 
   } catch (e) {
