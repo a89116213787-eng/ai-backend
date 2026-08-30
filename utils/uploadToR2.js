@@ -153,6 +153,30 @@ export async function uploadVideoToR2WithKey(buffer) {
   };
 }
 
+export async function uploadVideoPosterToR2WithKey(buffer, videoKey) {
+  const match = String(videoKey).match(/^videos\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.mp4$/i);
+
+  if (!match) {
+    throw new Error("invalid generated video key");
+  }
+
+  const key = `videos/${match[1]}-poster.webp`;
+
+  await s3.send(
+    new PutObjectCommand({
+      Bucket: process.env.R2_BUCKET,
+      Key: key,
+      Body: buffer,
+      ContentType: "image/webp",
+    })
+  );
+
+  return {
+    key,
+    url: `/api/video-poster/${match[1]}-poster.webp`
+  };
+}
+
 export async function deletePromptImageFromR2(key) {
   await s3.send(
     new DeleteObjectCommand({

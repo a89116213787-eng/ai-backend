@@ -11,7 +11,8 @@ import axios from "axios";
 import dotenv from "dotenv";
 import { sendMail } from "./src/services/mailClient.js";
 import { verifyEmailTemplate } from "./src/templates/emails/verifyEmailTemplate.js";
-import { uploadToR2, uploadToR2WithKey, uploadGeneratedImagePreviewToR2, uploadPromptImageToR2, uploadPromptImagePreviewToR2, uploadVideoToR2WithKey, deleteFromR2ByKey, getObjectFromR2ByKey } from "./utils/uploadToR2.js";
+import { uploadToR2, uploadToR2WithKey, uploadGeneratedImagePreviewToR2, uploadPromptImageToR2, uploadPromptImagePreviewToR2, uploadVideoToR2WithKey, uploadVideoPosterToR2WithKey, deleteFromR2ByKey, getObjectFromR2ByKey } from "./utils/uploadToR2.js";
+import { createVideoPoster } from "./utils/createVideoPoster.js";
 import sharp from "sharp";
 import Replicate from "replicate";
 import deleteImageRoute from "./delete-image.js";
@@ -705,6 +706,10 @@ try {
 
     if (videoKey) {
       cleanupKeys.set(videoKey, "generated_video");
+    }
+
+    if (isGeneratedVideoPosterKey(row.preview_key)) {
+      cleanupKeys.set(row.preview_key, "generated_video_poster");
     }
   }
 
@@ -3956,6 +3961,12 @@ function isGeneratedVideoKey(key) {
   return /^videos\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.mp4$/i.test(key);
 }
 
+function isGeneratedVideoPosterKey(key) {
+  if (typeof key !== "string") return false;
+
+  return /^videos\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-poster\.webp$/i.test(key);
+}
+
 function getGeneratedVideoKey(videoUrl) {
   if (typeof videoUrl !== "string") {
     return null;
@@ -4254,6 +4265,7 @@ async function cleanupQueuedR2Objects(objectKeys = null) {
       "generated_image",
       "generated_image_preview",
       "generated_video",
+      "generated_video_poster",
       "prompt_image",
       "prompt_preview",
       "avatar",
@@ -4265,7 +4277,7 @@ async function cleanupQueuedR2Objects(objectKeys = null) {
     const result = Array.isArray(objectKeys) && objectKeys.length
       ? await pool.query(
         `
-        SELECT id, object_key
+        SELECT id, object_key, object_type
         FROM r2_cleanup_queue
         WHERE object_key = ANY($1::text[])
           AND object_type = ANY($2::text[])
@@ -4275,7 +4287,7 @@ async function cleanupQueuedR2Objects(objectKeys = null) {
       )
       : await pool.query(
         `
-        SELECT id, object_key
+        SELECT id, object_key, object_type
         FROM r2_cleanup_queue
         WHERE object_type = ANY($1::text[])
         ORDER BY created_at ASC
@@ -4285,6 +4297,10 @@ async function cleanupQueuedR2Objects(objectKeys = null) {
 
     for (const row of result.rows) {
       try {
+        if (row.object_type === "generated_video_poster" && !isGeneratedVideoPosterKey(row.object_key)) {
+          throw new Error("invalid_generated_video_poster_key");
+        }
+
         await deleteFromR2ByKey(row.object_key);
 
         await pool.query(
@@ -5860,6 +5876,17 @@ const buffer = Buffer.from(arrayBuffer);
 
 const uploadedVideo = await uploadVideoToR2WithKey(buffer);
 const videoKey = uploadedVideo.videoKey;
+let posterUrl = null;
+let posterKey = null;
+
+try {
+  const posterBuffer = await createVideoPoster(buffer);
+  const uploadedPoster = await uploadVideoPosterToR2WithKey(posterBuffer, uploadedVideo.key);
+  posterUrl = uploadedPoster.url;
+  posterKey = uploadedPoster.key;
+} catch (e) {
+  console.warn("video poster creation failed", e?.message || e);
+}
 
 // 🔥 получаем userId
 const userId = req.user.id;
@@ -5871,37 +5898,46 @@ const prompt = req.body.prompt || "video generation";
 try {
   await pool.query(
     `
-    INSERT INTO generations (user_id, prompt, video_url, video_key)
-    VALUES ($1, $2, $3, $4)
+    INSERT INTO generations (user_id, prompt, video_url, video_key, preview_url, preview_key)
+    VALUES ($1, $2, $3, $4, $5, $6)
     `,
     [
       userId,
       prompt,
       uploadedVideo.url,
-      uploadedVideo.key
+      uploadedVideo.key,
+      posterUrl,
+      posterKey
     ]
   );
 } catch (e) {
-  try {
-    await pool.query(
-      `
-      INSERT INTO r2_cleanup_queue (object_key, object_type, last_error)
-      VALUES ($1, $2, $3)
-      ON CONFLICT (object_key) DO NOTHING
-      `,
-      [
-        uploadedVideo.key,
-        "generated_video",
-        "video_generation_db_insert_failed"
-      ]
-    );
-  } catch (queueError) {
-    console.error("VIDEO CLEANUP QUEUE INSERT ERROR:", queueError?.message || queueError);
+  const cleanupObjects = [
+    { key: uploadedVideo.key, type: "generated_video" },
+    ...(posterKey ? [{ key: posterKey, type: "generated_video_poster" }] : [])
+  ];
 
+  for (const cleanupObject of cleanupObjects) {
     try {
-      await deleteFromR2ByKey(uploadedVideo.key);
-    } catch (deleteError) {
-      console.error("VIDEO IMMEDIATE CLEANUP ERROR:", deleteError?.message || deleteError);
+      await pool.query(
+        `
+        INSERT INTO r2_cleanup_queue (object_key, object_type, last_error)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (object_key) DO NOTHING
+        `,
+        [
+          cleanupObject.key,
+          cleanupObject.type,
+          "video_generation_db_insert_failed"
+        ]
+      );
+    } catch (queueError) {
+      console.error("VIDEO CLEANUP QUEUE INSERT ERROR:", queueError?.message || queueError);
+
+      try {
+        await deleteFromR2ByKey(cleanupObject.key);
+      } catch (deleteError) {
+        console.error("VIDEO IMMEDIATE CLEANUP ERROR:", deleteError?.message || deleteError);
+      }
     }
   }
 
@@ -6119,6 +6155,10 @@ async function cleanupOldGenerations() {
           }
 
           keys.push(videoKey);
+
+          if (isGeneratedVideoPosterKey(row.preview_key)) {
+            keys.push(row.preview_key);
+          }
         }
 
         for (const key of keys) {
