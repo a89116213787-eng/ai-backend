@@ -4427,26 +4427,25 @@ app.post("/api/prompt-card/cleanup-abandoned-upload", authMiddleware, async (req
 app.get("/api/user/generations", authMiddleware, async (req, res) => {
   try {
     const userId = req.user.id;
-    const DEFAULT_PAGED_IMAGE_LIMIT = 24;
-    const MAX_IMAGE_LIMIT = 50;
-    const requestedImageLimit = req.query.imageLimit;
-    const parsedImageLimit = Number.parseInt(String(requestedImageLimit), 10);
-    const imageLimit = Math.min(
+    const DEFAULT_HISTORY_LIMIT = 24;
+    const MAX_HISTORY_LIMIT = 50;
+    const requestedHistoryLimit = req.query.historyLimit;
+    const parsedHistoryLimit = Number.parseInt(String(requestedHistoryLimit), 10);
+    const historyLimit = Math.min(
       Math.max(
-        Number.isFinite(parsedImageLimit) && parsedImageLimit > 0
-          ? parsedImageLimit
-          : DEFAULT_PAGED_IMAGE_LIMIT,
+        Number.isFinite(parsedHistoryLimit) && parsedHistoryLimit > 0
+          ? parsedHistoryLimit
+          : DEFAULT_HISTORY_LIMIT,
         1
       ),
-      MAX_IMAGE_LIMIT
+      MAX_HISTORY_LIMIT
     );
-    const imageQueryLimit = imageLimit + 1;
-    const includeVideos = req.query.includeVideos !== "false";
-    const cursorCreatedAt = typeof req.query.imageCursorCreatedAt === "string"
-      ? req.query.imageCursorCreatedAt
+    const historyQueryLimit = historyLimit + 1;
+    const cursorCreatedAt = typeof req.query.historyCursorCreatedAt === "string"
+      ? req.query.historyCursorCreatedAt
       : null;
-    const cursorId = typeof req.query.imageCursorId === "string"
-      ? req.query.imageCursorId
+    const cursorId = typeof req.query.historyCursorId === "string"
+      ? req.query.historyCursorId
       : null;
     const cursorDate = cursorCreatedAt ? new Date(cursorCreatedAt) : null;
     const hasValidCursor = Boolean(
@@ -4456,7 +4455,7 @@ app.get("/api/user/generations", authMiddleware, async (req, res) => {
       /^\d+$/.test(cursorId)
     );
 
-    const imageParams = [userId];
+    const historyParams = [userId];
     const cursorWhere = hasValidCursor
       ? `
           AND (
@@ -4470,65 +4469,42 @@ app.get("/api/user/generations", authMiddleware, async (req, res) => {
       : "";
 
     if (hasValidCursor) {
-      imageParams.push(cursorDate, cursorId);
+      historyParams.push(cursorDate, cursorId);
     }
 
-    imageParams.push(imageQueryLimit);
+    historyParams.push(historyQueryLimit);
 
-    const imageResult = await pool.query(
+    const historyResult = await pool.query(
       `
       SELECT id, prompt, image_url, preview_url, video_url, liked, created_at
       FROM generations
       WHERE user_id = $1
-      AND image_url IS NOT NULL
+      AND (
+        image_url IS NOT NULL
+        OR video_url IS NOT NULL
+      )
       ${cursorWhere}
       ORDER BY created_at DESC, id DESC
-      LIMIT $${imageParams.length}
+      LIMIT $${historyParams.length}
       `,
-      imageParams
+      historyParams
     );
 
-    const hasMoreImages = imageResult.rows.length > imageLimit;
-    const imageRows = imageResult.rows.slice(0, imageLimit);
-    const lastImage = imageRows[imageRows.length - 1] || null;
-    const nextImageCursor = hasMoreImages && lastImage
+    const hasMoreHistory = historyResult.rows.length > historyLimit;
+    const items = historyResult.rows.slice(0, historyLimit);
+    const lastItem = items[items.length - 1] || null;
+    const nextHistoryCursor = hasMoreHistory && lastItem
       ? {
-          createdAt: lastImage.created_at,
-          id: lastImage.id,
+          createdAt: lastItem.created_at,
+          id: lastItem.id,
         }
       : null;
-    let videoRows = [];
-
-    if (includeVideos) {
-      const videoResult = await pool.query(
-        `
-        SELECT id, prompt, image_url, preview_url, video_url, liked, created_at
-        FROM generations
-        WHERE user_id = $1
-        AND video_url IS NOT NULL
-        ORDER BY created_at DESC
-        LIMIT 50
-        `,
-        [userId]
-      );
-
-      videoRows = videoResult.rows;
-    }
-
-    const items = [...imageRows, ...videoRows].sort((a, b) => {
-      const timeDiff = new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
-      if (timeDiff !== 0) return timeDiff;
-
-      const aId = BigInt(a.id);
-      const bId = BigInt(b.id);
-      return bId > aId ? 1 : bId < aId ? -1 : 0;
-    });
 
     res.json({
       ok: true,
       items,
-      hasMoreImages,
-      nextImageCursor,
+      hasMoreHistory,
+      nextHistoryCursor,
     });
 
   } catch (e) {
