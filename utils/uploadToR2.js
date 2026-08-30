@@ -195,11 +195,17 @@ export async function deleteFromR2ByKey(key) {
   );
 }
 
-export async function getObjectFromR2ByKey(key) {
+export async function getObjectFromR2ByKey(key, options = {}) {
+  const input = {
+    Bucket: process.env.R2_BUCKET,
+    Key: key
+  };
+
+  if (typeof options.range === "string" && options.range) {
+    input.Range = options.range;
+  }
+
   return s3.send(
-    new GetObjectCommand({
-      Bucket: process.env.R2_BUCKET,
-      Key: key
-    })
+    new GetObjectCommand(input)
   );
 }

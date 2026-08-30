@@ -6102,6 +6102,148 @@ app.get("/api/video-poster/:poster", authMiddleware, async (req, res) => {
   }
 });
 
+function getSingleVideoRange(rangeHeader) {
+  if (typeof rangeHeader !== "string" || !rangeHeader.trim()) {
+    return null;
+  }
+
+  const range = rangeHeader.trim();
+
+  if (range.includes(",")) {
+    return false;
+  }
+
+  const match = range.match(/^bytes=(\d*)-(\d*)$/);
+
+  if (!match) {
+    return false;
+  }
+
+  const [, start, end] = match;
+
+  if (!start && !end) {
+    return false;
+  }
+
+  if (!start && Number(end) <= 0) {
+    return false;
+  }
+
+  if (start && end && Number(start) > Number(end)) {
+    return false;
+  }
+
+  return `bytes=${start}-${end}`;
+}
+
+function setVideoObjectHeaders(res, object, statusCode) {
+  res.status(statusCode);
+  res.setHeader("Content-Type", "video/mp4");
+  res.setHeader("Accept-Ranges", "bytes");
+  res.setHeader(
+    "Content-Disposition",
+    'attachment; filename="video.mp4"'
+  );
+
+  if (object.ContentLength !== undefined) {
+    res.setHeader("Content-Length", String(object.ContentLength));
+  }
+
+  if (object.ContentRange) {
+    res.setHeader("Content-Range", object.ContentRange);
+  }
+}
+
+function isUnsatisfiableRangeError(error) {
+  return (
+    error?.$metadata?.httpStatusCode === 416 ||
+    error?.name === "InvalidRange" ||
+    error?.Code === "InvalidRange" ||
+    error?.code === "InvalidRange"
+  );
+}
+
+function setRangeNotSatisfiable(res, error) {
+  if (error?.ContentRange) {
+    res.setHeader("Content-Range", error.ContentRange);
+  }
+
+  return res.status(416).end();
+}
+
+function streamR2BodyToResponse(req, res, body) {
+  return new Promise((resolve, reject) => {
+    if (!body || typeof body.pipe !== "function") {
+      reject(new Error("invalid_r2_body_stream"));
+      return;
+    }
+
+    let settled = false;
+    let clientClosed = false;
+
+    const cleanup = () => {
+      res.off("close", onClose);
+      body.off("error", onBodyError);
+      res.off("error", onResponseError);
+      res.off("finish", onFinish);
+    };
+
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+
+      if (error) {
+        reject(error);
+        return;
+      }
+
+      resolve();
+    };
+
+    const onClose = () => {
+      if (res.writableEnded) return;
+
+      clientClosed = true;
+
+      if (typeof body.destroy === "function") {
+        body.destroy();
+      }
+
+      finish();
+    };
+
+    const onBodyError = (error) => {
+      if (clientClosed) {
+        finish();
+        return;
+      }
+
+      finish(error);
+    };
+
+    const onResponseError = (error) => {
+      if (clientClosed) {
+        finish();
+        return;
+      }
+
+      finish(error);
+    };
+
+    const onFinish = () => {
+      finish();
+    };
+
+    res.on("close", onClose);
+    body.on("error", onBodyError);
+    res.on("error", onResponseError);
+    res.on("finish", onFinish);
+
+    body.pipe(res);
+  });
+}
+
 app.get("/api/download-video/:key", async (req, res) => {
 
   try {
@@ -6134,25 +6276,36 @@ app.get("/api/download-video/:key", async (req, res) => {
       });
     }
 
-    const object = await getObjectFromR2ByKey(objectKey);
+    const requestedRange = getSingleVideoRange(req.headers.range);
 
-    const chunks = [];
-
-    for await (const chunk of object.Body) {
-      chunks.push(chunk);
+    if (requestedRange === false) {
+      return res.status(416).end();
     }
 
-    const buffer = Buffer.concat(chunks);
+    let object;
 
-    res.setHeader("Content-Type", "video/mp4");
-    res.setHeader(
-      "Content-Disposition",
-      'attachment; filename="video.mp4"'
-    );
+    try {
+      object = await getObjectFromR2ByKey(
+        objectKey,
+        requestedRange ? { range: requestedRange } : {}
+      );
+    } catch (rangeError) {
+      if (requestedRange && isUnsatisfiableRangeError(rangeError)) {
+        return setRangeNotSatisfiable(res, rangeError);
+      }
 
-    res.send(buffer);
+      throw rangeError;
+    }
+
+    setVideoObjectHeaders(res, object, requestedRange ? 206 : 200);
+
+    await streamR2BodyToResponse(req, res, object.Body);
 
   } catch (e) {
+
+    if (res.headersSent) {
+      return;
+    }
 
     console.error("VIDEO DOWNLOAD ERROR:", e);
 
