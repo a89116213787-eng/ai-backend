@@ -4427,22 +4427,19 @@ app.post("/api/prompt-card/cleanup-abandoned-upload", authMiddleware, async (req
 app.get("/api/user/generations", authMiddleware, async (req, res) => {
   try {
     const userId = req.user.id;
-    const DEFAULT_IMAGE_LIMIT = 150;
     const DEFAULT_PAGED_IMAGE_LIMIT = 24;
     const MAX_IMAGE_LIMIT = 50;
     const requestedImageLimit = req.query.imageLimit;
     const parsedImageLimit = Number.parseInt(String(requestedImageLimit), 10);
-    const imageLimit = requestedImageLimit === undefined
-      ? DEFAULT_IMAGE_LIMIT
-      : Math.min(
-          Math.max(
-            Number.isFinite(parsedImageLimit) && parsedImageLimit > 0
-              ? parsedImageLimit
-              : DEFAULT_PAGED_IMAGE_LIMIT,
-            1
-          ),
-          MAX_IMAGE_LIMIT
-        );
+    const imageLimit = Math.min(
+      Math.max(
+        Number.isFinite(parsedImageLimit) && parsedImageLimit > 0
+          ? parsedImageLimit
+          : DEFAULT_PAGED_IMAGE_LIMIT,
+        1
+      ),
+      MAX_IMAGE_LIMIT
+    );
     const imageQueryLimit = imageLimit + 1;
     const includeVideos = req.query.includeVideos !== "false";
     const cursorCreatedAt = typeof req.query.imageCursorCreatedAt === "string"
