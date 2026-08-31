@@ -6046,33 +6046,12 @@ app.post("/api/video/access", authMiddleware, async (req, res) => {
 // 🎬 VIDEO DOWNLOAD (R2 → USER)
 // ======================================================
 
-app.get("/api/video-poster/:poster", authMiddleware, async (req, res) => {
+app.get("/api/video-poster/:poster", async (req, res) => {
   try {
     const { poster } = req.params;
     const objectKey = `videos/${poster}`;
 
     if (!isGeneratedVideoPosterKey(objectKey)) {
-      return res.status(404).json({
-        ok: false,
-        error: "video_poster_not_found"
-      });
-    }
-
-    const originalVideoKey = objectKey.replace(/-poster\.webp$/i, ".mp4");
-    const owner = await pool.query(
-      `
-      SELECT id
-      FROM generations
-      WHERE user_id = $1
-      AND preview_key = $2
-      AND video_url IS NOT NULL
-      AND video_key = $3
-      LIMIT 1
-      `,
-      [req.user.id, objectKey, originalVideoKey]
-    );
-
-    if (!owner.rows.length) {
       return res.status(404).json({
         ok: false,
         error: "video_poster_not_found"
