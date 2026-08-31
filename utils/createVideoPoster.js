@@ -126,8 +126,8 @@ export async function createVideoPoster(videoBuffer) {
         const frameBuffer = await extractFrame(tempVideoPath, timestampSeconds);
         return sharp(frameBuffer)
           .resize({
-            width: 512,
-            height: 512,
+            width: 1024,
+            height: 1024,
             fit: "inside",
             withoutEnlargement: true,
           })
