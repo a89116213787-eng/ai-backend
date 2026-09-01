@@ -5678,7 +5678,7 @@ app.post("/api/generate-video", authMiddleware, async (req, res) => {
 
   try {
 
-    const { prompt, image, model, duration } = req.body;
+    const { prompt, image, video, model, duration, resolution, aspect_ratio, reference_images, reference_video } = req.body;
 
     const { id, role } = req.user;
 
@@ -5688,6 +5688,7 @@ app.post("/api/generate-video", authMiddleware, async (req, res) => {
 );
 
 const isAdmin = role === "admin" || user.rows[0]?.admin_subscription;
+const klingModel = model || KLING_MODELS.flash;
 
     // ===============================
     // 🔒 SUBSCRIPTION CHECK
@@ -5706,6 +5707,246 @@ const isAdmin = role === "admin" || user.rows[0]?.admin_subscription;
         });
       }
 
+    }
+
+    if (klingModel === KLING_MODELS.flash) {
+      const flashDuration = Number(duration);
+      const hasUsableImage =
+        typeof image === "string" &&
+        (image.startsWith("data:") || image.startsWith("http"));
+
+      if (typeof prompt !== "string" || !prompt.trim()) {
+        return res.status(400).json({
+          ok: false,
+          error: "invalid_flash_prompt",
+          message: "Напишите промпт"
+        });
+      }
+
+      if (!hasUsableImage) {
+        return res.status(400).json({
+          ok: false,
+          error: "invalid_flash_image",
+          message: "Добавьте изображение"
+        });
+      }
+
+      if (![5, 10].includes(flashDuration)) {
+        return res.status(400).json({
+          ok: false,
+          error: "invalid_flash_duration",
+          message: "Для Flash доступны только 5 или 10 секунд"
+        });
+      }
+
+      if (!["720p", "1080p"].includes(resolution)) {
+        return res.status(400).json({
+          ok: false,
+          error: "invalid_flash_resolution",
+          message: "Выберите 720p или 1080p"
+        });
+      }
+    }
+
+    if (klingModel === KLING_MODELS.pro) {
+      const proDuration = Number(duration);
+      const hasImageInput = image !== undefined && image !== null && image !== "";
+      const hasUsableImage =
+        typeof image === "string" &&
+        (image.startsWith("data:") || image.startsWith("http"));
+      const hasVideoInput = typeof video === "string" && video.trim().length > 0;
+      const proTextAspectRatios = ["1:1", "16:9", "9:16", "4:3", "3:4"];
+
+      if (typeof prompt !== "string" || !prompt.trim()) {
+        return res.status(400).json({
+          ok: false,
+          error: "invalid_pro_prompt",
+          message: "Напишите промпт"
+        });
+      }
+
+      if (hasVideoInput) {
+        return res.status(400).json({
+          ok: false,
+          error: "invalid_pro_video",
+          message: "Видео для этой модели не поддерживается"
+        });
+      }
+
+      if (![5, 10].includes(proDuration)) {
+        return res.status(400).json({
+          ok: false,
+          error: "invalid_pro_duration",
+          message: "Для Pro доступны только 5 или 10 секунд"
+        });
+      }
+
+      if (hasImageInput && !hasUsableImage) {
+        return res.status(400).json({
+          ok: false,
+          error: "invalid_pro_image",
+          message: "Добавьте изображение"
+        });
+      }
+
+      if (!hasUsableImage && !proTextAspectRatios.includes(aspect_ratio)) {
+        return res.status(400).json({
+          ok: false,
+          error: "invalid_pro_aspect_ratio",
+          message: "Выберите соотношение сторон"
+        });
+      }
+    }
+
+    if (klingModel === KLING_MODELS.ultra) {
+      const ultraDuration = Number(duration);
+      const ultraAspectRatios = ["1:1", "16:9", "9:16", "4:3", "3:4"];
+      const hasLegacyImageInput = image !== undefined && image !== null && image !== "";
+      const hasLegacyVideoInput = video !== undefined && video !== null && video !== "";
+      const hasReferenceImagesInput =
+        reference_images !== undefined &&
+        reference_images !== null &&
+        reference_images !== "";
+      const ultraReferenceImages = Array.isArray(reference_images) ? reference_images : [];
+      const hasReferenceVideoInput =
+        reference_video !== undefined &&
+        reference_video !== null &&
+        reference_video !== "";
+      const hasReferenceVideo =
+        typeof reference_video === "string" &&
+        reference_video.trim().length > 0;
+      const isUsableReferenceSource = (source) =>
+        typeof source === "string" &&
+        (source.startsWith("data:") || source.startsWith("http"));
+
+      if (typeof prompt !== "string" || !prompt.trim()) {
+        return res.status(400).json({
+          ok: false,
+          error: "invalid_ultra_prompt",
+          message: "Напишите промпт"
+        });
+      }
+
+      if (![5, 10, 15].includes(ultraDuration)) {
+        return res.status(400).json({
+          ok: false,
+          error: "invalid_ultra_duration",
+          message: "Для Ultra доступны только 5, 10 или 15 секунд"
+        });
+      }
+
+      if (!["720p", "1080p"].includes(resolution)) {
+        return res.status(400).json({
+          ok: false,
+          error: "invalid_ultra_resolution",
+          message: "Выберите 720p или 1080p"
+        });
+      }
+
+      if (hasLegacyImageInput || hasLegacyVideoInput) {
+        return res.status(400).json({
+          ok: false,
+          error: "invalid_ultra_media_payload",
+          message: "Для Ultra используйте reference images/video"
+        });
+      }
+
+      if (hasReferenceImagesInput && !Array.isArray(reference_images)) {
+        return res.status(400).json({
+          ok: false,
+          error: "invalid_ultra_reference_images",
+          message: "Разрешено только 4 изображения"
+        });
+      }
+
+      if (ultraReferenceImages.length > 4) {
+        return res.status(400).json({
+          ok: false,
+          error: "too_many_ultra_reference_images",
+          message: "Разрешено только 4 изображения"
+        });
+      }
+
+      if (ultraReferenceImages.some((source) => !isUsableReferenceSource(source))) {
+        return res.status(400).json({
+          ok: false,
+          error: "invalid_ultra_reference_image",
+          message: "Разрешено только 4 изображения"
+        });
+      }
+
+      if (hasReferenceVideoInput && !hasReferenceVideo) {
+        return res.status(400).json({
+          ok: false,
+          error: "invalid_ultra_reference_video",
+          message: "Разрешено только 1 видео"
+        });
+      }
+
+      if (hasReferenceVideo && !isUsableReferenceSource(reference_video)) {
+        return res.status(400).json({
+          ok: false,
+          error: "invalid_ultra_reference_video",
+          message: "Разрешено только 1 видео"
+        });
+      }
+
+      if (!ultraAspectRatios.includes(aspect_ratio)) {
+        return res.status(400).json({
+          ok: false,
+          error: "invalid_ultra_aspect_ratio",
+          message: "Выберите соотношение сторон"
+        });
+      }
+    }
+
+    if (klingModel === KLING_MODELS.motion) {
+      const hasUsableImage =
+        typeof image === "string" &&
+        (image.startsWith("data:") || image.startsWith("http"));
+      const hasUsableVideo =
+        typeof video === "string" &&
+        (video.startsWith("data:") || video.startsWith("http"));
+      const hasReferenceImagesInput =
+        reference_images !== undefined &&
+        reference_images !== null &&
+        reference_images !== "";
+      const hasReferenceVideoInput =
+        reference_video !== undefined &&
+        reference_video !== null &&
+        reference_video !== "";
+
+      if (!hasUsableImage) {
+        return res.status(400).json({
+          ok: false,
+          error: "invalid_motion_image",
+          message: "Добавьте изображение"
+        });
+      }
+
+      if (!hasUsableVideo) {
+        return res.status(400).json({
+          ok: false,
+          error: "invalid_motion_video",
+          message: "Добавьте видео"
+        });
+      }
+
+      if (!["720p", "1080p"].includes(resolution)) {
+        return res.status(400).json({
+          ok: false,
+          error: "invalid_motion_resolution",
+          message: "Выберите 720p или 1080p"
+        });
+      }
+
+      if (hasReferenceImagesInput || hasReferenceVideoInput) {
+        return res.status(400).json({
+          ok: false,
+          error: "invalid_motion_media_payload",
+          message: "Для Motion используйте image/video"
+        });
+      }
     }
 
     // ===============================
@@ -5774,15 +6015,73 @@ const isAdmin = role === "admin" || user.rows[0]?.admin_subscription;
     // MODEL SELECT
     // ===============================
 
-    const klingModel = model || KLING_MODELS.flash;
-
-    const input = {
-     prompt,
-     duration: duration || 5
-    };
+    const input = klingModel === KLING_MODELS.motion
+      ? {
+          prompt: typeof prompt === "string" ? prompt : ""
+        }
+      : {
+          prompt,
+          duration: duration || 5
+        };
   
-    if (startImage) {
+    if (startImage && klingModel !== KLING_MODELS.motion) {
       input.start_image = startImage;
+    }
+
+    if (klingModel === KLING_MODELS.flash) {
+      input.duration = Number(duration);
+      input.mode = resolution === "1080p" ? "pro" : "standard";
+    }
+
+    if (klingModel === KLING_MODELS.pro) {
+      input.duration = Number(duration);
+
+      if (!startImage) {
+        const proAspectRatioMap = {
+          "1:1": "1:1",
+          "16:9": "16:9",
+          "9:16": "9:16",
+          "4:3": "16:9",
+          "3:4": "9:16"
+        };
+
+        input.aspect_ratio = proAspectRatioMap[aspect_ratio];
+      }
+    }
+
+    if (klingModel === KLING_MODELS.ultra) {
+      input.duration = Number(duration);
+      input.mode = resolution === "1080p" ? "pro" : "standard";
+
+      const ultraReferenceImages = Array.isArray(reference_images) ? reference_images : [];
+      const hasReferenceVideo =
+        typeof reference_video === "string" &&
+        reference_video.trim().length > 0;
+
+      if (ultraReferenceImages.length > 0) {
+        input.reference_images = ultraReferenceImages;
+      }
+
+      if (hasReferenceVideo) {
+        input.reference_video = reference_video;
+        input.video_reference_type = "feature";
+      }
+
+      const ultraAspectRatioMap = {
+        "1:1": "1:1",
+        "16:9": "16:9",
+        "9:16": "9:16",
+        "4:3": "16:9",
+        "3:4": "9:16"
+      };
+
+      input.aspect_ratio = ultraAspectRatioMap[aspect_ratio];
+    }
+
+    if (klingModel === KLING_MODELS.motion) {
+      input.image = startImage || image;
+      input.video = video;
+      input.mode = resolution === "1080p" ? "pro" : "std";
     }
 
     // ===============================
