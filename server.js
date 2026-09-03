@@ -4991,6 +4991,12 @@ if (Array.isArray(images)) allIncomingImages.push(...images);
 if (Array.isArray(peopleImages)) allIncomingImages.push(...peopleImages);
 if (Array.isArray(objectImages)) allIncomingImages.push(...objectImages);
 
+if (modelName === "gemini-2.5-flash-image" && allIncomingImages.length > 3) {
+  return res.status(400).json({
+    error: "Maximum 3 images allowed"
+  });
+}
+
 // ограничение по количеству
 if (allIncomingImages.length > MAX_IMAGES) {
   return res.status(400).json({
@@ -5160,6 +5166,7 @@ if (aspectRatio && typeof aspectRatio === "string") {
 
 let parts = [];
 let orderedImages = [];
+let numberedImages = [];
 
 // 🟣 PRO MODEL — structured identity
 if (finalModel === "gemini-3-pro-image-preview") {
@@ -5248,6 +5255,8 @@ if (
     fallbackImages = [image];
   }
 
+  numberedImages = fallbackImages;
+
   for (const img of fallbackImages) {
 
   const base64 = await normalizeImageToBase64(img);
@@ -5274,6 +5283,8 @@ else {
   else if (image && typeof image === "string") {
     orderedImages = [image];
   }
+
+  numberedImages = orderedImages;
 
   if (orderedImages.length > 14) {
     return res.status(400).json({
@@ -5302,12 +5313,11 @@ else {
 
 let numberedInstruction = "";
 
-if (orderedImages.length > 0) {
+if (numberedImages.length > 0) {
   numberedInstruction =
-    `You are editing provided images.\n` +
-    `Image numbering follows order:\n` +
-    orderedImages
-      .map((_, i) => `Image ${i + 1}`)
+    `Reference image numbering:\n` +
+    numberedImages
+      .map((_, i) => `Image ${i + 1} / Фото ${i + 1} / Картинка ${i + 1} / Изображение ${i + 1} refers to attached reference image ${i + 1}.`)
       .join("\n") +
     `\n\n`;
 }
@@ -5367,7 +5377,7 @@ Rules:
 }
 
 parts.push({
-  text: finalPrompt
+  text: numberedInstruction + finalPrompt
 });
 
 // ======================================
