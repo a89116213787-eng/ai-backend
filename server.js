@@ -3995,6 +3995,19 @@ function signVideoAccessUrl(objectKey, exp) {
     .digest("hex");
 }
 
+function signImageDownloadUrl(objectKey, exp) {
+  const secret = getVideoSigningSecret();
+
+  if (!secret) {
+    return null;
+  }
+
+  return crypto
+    .createHmac("sha256", secret)
+    .update(`image-download:${objectKey}:${exp}`)
+    .digest("hex");
+}
+
 function getVideoFileNameFromKey(objectKey) {
   if (!isGeneratedVideoKey(objectKey)) {
     return null;
@@ -5695,6 +5708,114 @@ app.post("/api/download/by-url", authMiddleware, async (req, res) => {
 // ======================================================
 // 🎬 VIDEO GENERATION (KLING)
 // ======================================================
+
+app.post("/api/image/download-access", authMiddleware, async (req, res) => {
+  try {
+
+    const { imageId, imageUrl } = req.body || {};
+    let result;
+
+    if (imageId) {
+      result = await pool.query(
+        `
+        SELECT image_url, image_key
+        FROM generations
+        WHERE id = $1
+        AND user_id = $2
+        `,
+        [imageId, req.user.id]
+      );
+    } else if (typeof imageUrl === "string" && imageUrl.trim()) {
+      result = await pool.query(
+        `
+        SELECT image_url, image_key
+        FROM generations
+        WHERE user_id = $1
+        AND image_url = $2
+        LIMIT 1
+        `,
+        [req.user.id, imageUrl]
+      );
+    } else {
+      return res.status(400).json({ ok: false, error: "imageId or imageUrl required" });
+    }
+
+    if (!result.rows.length) {
+      return res.status(404).json({ ok: false, error: "image not found" });
+    }
+
+    const key = getGeneratedImageKey(result.rows[0]);
+
+    if (!key) {
+      return res.status(404).json({ ok: false, error: "image not found" });
+    }
+
+    const exp = Math.floor(Date.now() / 1000) + 5 * 60;
+    const sig = signImageDownloadUrl(key, exp);
+
+    if (!sig) {
+      return res.status(500).json({ ok: false, error: "image_signing_not_configured" });
+    }
+
+    res.json({
+      ok: true,
+      url: `https://api.dizain.pro/api/download-png/${key}?exp=${exp}&sig=${sig}`,
+      expiresAt: exp
+    });
+
+  } catch (e) {
+    console.error("IMAGE DOWNLOAD ACCESS ERROR", e);
+    res.status(500).json({ ok: false, error: "image_download_access_failed" });
+  }
+});
+
+app.get("/api/download-png/:folder/:file", async (req, res) => {
+  try {
+
+    const key = `${req.params.folder}/${req.params.file}`;
+    const exp = Number(req.query.exp);
+    const sig = typeof req.query.sig === "string" ? req.query.sig : null;
+
+    if (!isGeneratedImageKey(key) || !Number.isFinite(exp) || !sig) {
+      return res.status(403).json({ error: "invalid_image_signature" });
+    }
+
+    if (exp < Math.floor(Date.now() / 1000)) {
+      return res.status(403).json({ error: "image_signature_expired" });
+    }
+
+    const expectedSig = signImageDownloadUrl(key, exp);
+
+    if (!expectedSig || !timingSafeEqualString(sig, expectedSig)) {
+      return res.status(403).json({ error: "invalid_image_signature" });
+    }
+
+    const object = await getObjectFromR2ByKey(key);
+
+    const chunks = [];
+    for await (const chunk of object.Body) {
+      chunks.push(chunk);
+    }
+
+    const buffer = Buffer.concat(chunks);
+
+    const png = await sharp(buffer)
+      .png()
+      .toBuffer();
+
+    res.setHeader("Content-Type", "image/png");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="dizain.png"`
+    );
+
+    res.send(png);
+
+  } catch (e) {
+    console.error("PNG DOWNLOAD ERROR", e);
+    res.status(500).json({ error: "download failed" });
+  }
+});
 
 app.post("/api/generate-video", authMiddleware, async (req, res) => {
 
