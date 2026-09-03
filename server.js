@@ -292,16 +292,6 @@ e
 
 });
 
-// ===============================
-// REQUEST SIGNATURE SECRET
-// ===============================
-// const REQUEST_SECRET = process.env.REQUEST_SECRET;
-
-// if (!REQUEST_SECRET) {
- // console.error("❌ REQUEST_SECRET is missing in ENV");
- // process.exit(1);
-//}
-
 // ==================
 // DB CONNECTION  ✅ КРИТИЧНО ДОБАВЛЕНО
 // ==================
@@ -467,39 +457,6 @@ async function authMiddleware(req, res, next) {
 import paymentsRouter from "./payments.js";
 app.use("/api/payments", paymentsRouter(pool, authMiddleware));
 app.use("/api", deleteImageRoute);
-
-// ===============================
-// VERIFY SIGNATURE (anti-abuse)
-// dev: отключено если нет REQUEST_SECRET
-// ===============================
-function verifyRequestSignature(req, res, next) {
-  try {
-    const secret = process.env.REQUEST_SECRET;
-    const signature = req.headers["x-request-sign"];
-
-    // если секрет не задан — пропускаем (dev режим)
-    if (!secret) return next();
-
-    // если секрет есть, но подписи нет — ошибка
-    if (!signature) {
-      return res.status(401).json({ error: "signature_missing" });
-    }
-
-    const expected = crypto
-      .createHmac("sha256", secret)
-      .update(JSON.stringify(req.body))
-      .digest("hex");
-
-    if (signature !== expected) {
-      return res.status(401).json({ error: "bad_signature" });
-    }
-
-    next();
-  } catch (e) {
-    console.error("SIGNATURE ERROR:", e);
-    res.status(500).json({ error: "signature_error" });
-  }
-}
 
 // ==================
 // 🔐 ADMIN ONLY MIDDLEWARE
