@@ -5410,7 +5410,7 @@ response = await ai.models.generateContent({
 
   return res.status(502).json({
     error: "model_no_image",
-    message: "Модель на обновлении. Попробуйте позже"
+    message: "Модель на обновлении, попробуйте позже"
   });
 }
 
@@ -5559,7 +5559,7 @@ return res.json({
 
   res.status(500).json({
   error: "generation_failed",
-  message: "Модель на обновлении. Попробуйте позже"
+  message: "Модель на обновлении, попробуйте позже"
 });
 
  }
@@ -6261,7 +6261,7 @@ return res.json({
     res.status(500).json({
      ok: false,
      error: "generation_failed",
-     message: "Модель на обновлении. Попробуйте позже"
+     message: "Модель на обновлении, попробуйте позже"
    });
 
   }
