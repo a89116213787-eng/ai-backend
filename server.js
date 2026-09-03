@@ -5635,6 +5635,63 @@ app.get("/api/download/:id", authMiddleware, async (req, res) => {
   }
 });
 
+app.post("/api/download/by-url", authMiddleware, async (req, res) => {
+  try {
+
+    const { imageUrl } = req.body || {};
+
+    if (typeof imageUrl !== "string" || !imageUrl.trim()) {
+      return res.status(400).json({ error: "imageUrl required" });
+    }
+
+    const result = await pool.query(
+      `
+      SELECT image_key
+      FROM generations
+      WHERE user_id = $1
+      AND image_url = $2
+      LIMIT 1
+      `,
+      [req.user.id, imageUrl]
+    );
+
+    if (!result.rows.length) {
+      return res.status(404).json({ error: "image not found" });
+    }
+
+    const key = getGeneratedImageKey(result.rows[0]);
+
+    if (!key) {
+      return res.status(404).json({ error: "image not found" });
+    }
+
+    const object = await getObjectFromR2ByKey(key);
+
+    const chunks = [];
+    for await (const chunk of object.Body) {
+      chunks.push(chunk);
+    }
+
+    const buffer = Buffer.concat(chunks);
+
+    const png = await sharp(buffer)
+      .png()
+      .toBuffer();
+
+    res.setHeader("Content-Type", "image/png");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="dizain.png"`
+    );
+
+    res.send(png);
+
+  } catch (e) {
+    console.error("DOWNLOAD ERROR", e);
+    res.status(500).json({ error: "download failed" });
+  }
+});
+
 // ======================================================
 // 🎬 VIDEO GENERATION (KLING)
 // ======================================================
