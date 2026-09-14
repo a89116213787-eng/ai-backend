@@ -19,7 +19,7 @@ import deleteImageRoute from "./delete-image.js";
 import multer from "multer";
 import TelegramBot from "node-telegram-bot-api";
 
-async function normalizeImageToBase64(img) {
+async function normalizeImageToBase64(img, traceContext = {}) {
 
   if (!img) return null;
 
@@ -27,9 +27,21 @@ async function normalizeImageToBase64(img) {
   if (img.startsWith("data:")) {
     const match = img.match(/^data:([^;]+);base64,(.*)$/);
     const mimeType = normalizeImageMimeType(match?.[1]) || "image/png";
+    const data = img.replace(/^data:.*;base64,/, "");
+
+    logPhotoReferenceTrace({
+      model: traceContext.model,
+      ref: "data-url",
+      fetchStatus: null,
+      contentType: match?.[1] || null,
+      byteLength: null,
+      first16Hex: null,
+      mimeType,
+      base64Length: data.length
+    });
 
     return {
-      data: img.replace(/^data:.*;base64,/, ""),
+      data,
       mimeType
     };
   }
@@ -40,18 +52,64 @@ async function normalizeImageToBase64(img) {
     const response = await fetch(img);
     const buffer = await response.arrayBuffer();
     const bytes = Buffer.from(buffer);
+    const contentType = response.headers.get("content-type");
     const mimeType =
-      normalizeImageMimeType(response.headers.get("content-type")) ||
+      normalizeImageMimeType(contentType) ||
       inferImageMimeType(bytes) ||
       "image/png";
+    const data = bytes.toString("base64");
+
+    logPhotoReferenceTrace({
+      model: traceContext.model,
+      ref: img,
+      fetchStatus: response.status,
+      contentType,
+      byteLength: bytes.length,
+      first16Hex: bytes.subarray(0, 16).toString("hex"),
+      mimeType,
+      base64Length: data.length
+    });
 
     return {
-      data: bytes.toString("base64"),
+      data,
       mimeType
     };
   }
 
   return null;
+}
+
+function logPhotoReferenceTrace(trace) {
+  console.log("[PHOTO_REF_TRACE]", {
+    model: trace.model || null,
+    ref: trace.ref,
+    fetchStatus: trace.fetchStatus,
+    contentType: trace.contentType,
+    byteLength: trace.byteLength,
+    first16Hex: trace.first16Hex,
+    mimeType: trace.mimeType,
+    base64Length: trace.base64Length
+  });
+}
+
+function logPhotoGenerateContentTrace(model, parts) {
+  const imageParts = parts
+    .filter((part) => part.inlineData?.data)
+    .map((part) => ({
+      mimeType: part.inlineData.mimeType,
+      dataLength: part.inlineData.data.length
+    }));
+  const textLength = parts
+    .filter((part) => typeof part.text === "string")
+    .reduce((total, part) => total + part.text.length, 0);
+
+  console.log("[PHOTO_GENERATE_CONTENT_TRACE]", {
+    model,
+    totalParts: parts.length,
+    partOrder: parts.map((part) => part.inlineData?.data ? "image" : "text"),
+    imageParts,
+    textLength
+  });
 }
 
 function normalizeImageMimeType(mimeType) {
@@ -5203,7 +5261,7 @@ if (finalModel === "gemini-3-pro-image-preview") {
 
     for (const img of peopleImages) {
 
-  const normalizedImage = await normalizeImageToBase64(img);
+  const normalizedImage = await normalizeImageToBase64(img, { model: finalModel });
   if (!normalizedImage) continue;
 
   parts.push({
@@ -5251,7 +5309,7 @@ Do not invent a new person.
 
     for (const img of objectImages) {
 
-  const normalizedImage = await normalizeImageToBase64(img);
+  const normalizedImage = await normalizeImageToBase64(img, { model: finalModel });
   if (!normalizedImage) continue;
 
   parts.push({
@@ -5286,7 +5344,7 @@ if (
 
   for (const img of fallbackImages) {
 
-  const normalizedImage = await normalizeImageToBase64(img);
+  const normalizedImage = await normalizeImageToBase64(img, { model: finalModel });
   if (!normalizedImage) continue;
 
   parts.push({
@@ -5321,7 +5379,7 @@ else {
 
   for (const img of orderedImages) {
 
-  const normalizedImage = await normalizeImageToBase64(img);
+  const normalizedImage = await normalizeImageToBase64(img, { model: finalModel });
   if (!normalizedImage) continue;
 
   parts.push({
@@ -5439,6 +5497,8 @@ if (finalModel === "gemini-3-pro-image-preview") {
   };
 
 }
+
+logPhotoGenerateContentTrace(finalModel, parts);
 
 response = await ai.models.generateContent({
   model: finalModel,
