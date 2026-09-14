@@ -25,7 +25,13 @@ async function normalizeImageToBase64(img) {
 
   // если уже base64
   if (img.startsWith("data:")) {
-    return img.replace(/^data:.*;base64,/, "");
+    const match = img.match(/^data:([^;]+);base64,(.*)$/);
+    const mimeType = normalizeImageMimeType(match?.[1]) || "image/png";
+
+    return {
+      data: img.replace(/^data:.*;base64,/, ""),
+      mimeType
+    };
   }
 
   // если URL (R2)
@@ -33,8 +39,59 @@ async function normalizeImageToBase64(img) {
 
     const response = await fetch(img);
     const buffer = await response.arrayBuffer();
+    const bytes = Buffer.from(buffer);
+    const mimeType =
+      normalizeImageMimeType(response.headers.get("content-type")) ||
+      inferImageMimeType(bytes) ||
+      "image/png";
 
-    return Buffer.from(buffer).toString("base64");
+    return {
+      data: bytes.toString("base64"),
+      mimeType
+    };
+  }
+
+  return null;
+}
+
+function normalizeImageMimeType(mimeType) {
+  if (!mimeType || typeof mimeType !== "string") return null;
+
+  const value = mimeType.split(";")[0].trim().toLowerCase();
+
+  if (value === "image/jpg") return "image/jpeg";
+  if (value === "image/jpeg") return "image/jpeg";
+  if (value === "image/png") return "image/png";
+  if (value === "image/webp") return "image/webp";
+
+  return null;
+}
+
+function inferImageMimeType(buffer) {
+  if (!Buffer.isBuffer(buffer) || buffer.length < 12) return null;
+
+  if (
+    buffer[0] === 0xff &&
+    buffer[1] === 0xd8 &&
+    buffer[2] === 0xff
+  ) {
+    return "image/jpeg";
+  }
+
+  if (
+    buffer[0] === 0x89 &&
+    buffer[1] === 0x50 &&
+    buffer[2] === 0x4e &&
+    buffer[3] === 0x47
+  ) {
+    return "image/png";
+  }
+
+  if (
+    buffer.toString("ascii", 0, 4) === "RIFF" &&
+    buffer.toString("ascii", 8, 12) === "WEBP"
+  ) {
+    return "image/webp";
   }
 
   return null;
@@ -5146,13 +5203,13 @@ if (finalModel === "gemini-3-pro-image-preview") {
 
     for (const img of peopleImages) {
 
-  const base64 = await normalizeImageToBase64(img);
-  if (!base64) continue;
+  const normalizedImage = await normalizeImageToBase64(img);
+  if (!normalizedImage) continue;
 
   parts.push({
     inlineData: {
-      data: base64,
-      mimeType: "image/png"
+      data: normalizedImage.data,
+      mimeType: normalizedImage.mimeType
     }
   });
 
@@ -5194,13 +5251,13 @@ Do not invent a new person.
 
     for (const img of objectImages) {
 
-  const base64 = await normalizeImageToBase64(img);
-  if (!base64) continue;
+  const normalizedImage = await normalizeImageToBase64(img);
+  if (!normalizedImage) continue;
 
   parts.push({
     inlineData: {
-      data: base64,
-      mimeType: "image/png"
+      data: normalizedImage.data,
+      mimeType: normalizedImage.mimeType
     }
   });
 
@@ -5229,13 +5286,13 @@ if (
 
   for (const img of fallbackImages) {
 
-  const base64 = await normalizeImageToBase64(img);
-  if (!base64) continue;
+  const normalizedImage = await normalizeImageToBase64(img);
+  if (!normalizedImage) continue;
 
   parts.push({
     inlineData: {
-      data: base64,
-      mimeType: "image/png"
+      data: normalizedImage.data,
+      mimeType: normalizedImage.mimeType
     }
   });
 
@@ -5264,13 +5321,13 @@ else {
 
   for (const img of orderedImages) {
 
-  const base64 = await normalizeImageToBase64(img);
-  if (!base64) continue;
+  const normalizedImage = await normalizeImageToBase64(img);
+  if (!normalizedImage) continue;
 
   parts.push({
     inlineData: {
-      data: base64,
-      mimeType: "image/png"
+      data: normalizedImage.data,
+      mimeType: normalizedImage.mimeType
     }
   });
 
