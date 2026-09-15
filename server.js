@@ -6822,6 +6822,22 @@ async function cleanupOldGenerations() {
         WHERE card->>'type' = 'generator'
           AND card->>'image' IS NOT NULL
           AND card->>'image' <> ''
+      ),
+      workspace_video_refs AS (
+        SELECT DISTINCT
+          w.user_id,
+          card->>'video' AS video_url
+        FROM workspaces w
+        CROSS JOIN LATERAL jsonb_array_elements(
+          CASE
+            WHEN jsonb_typeof(w.data->'cards') = 'array'
+            THEN w.data->'cards'
+            ELSE '[]'::jsonb
+          END
+        ) AS card
+        WHERE card->>'type' = 'video'
+          AND card->>'video' IS NOT NULL
+          AND card->>'video' <> ''
       )
       SELECT id, image_url, image_key, preview_key, video_url, video_key
       FROM generations g
@@ -6834,6 +6850,15 @@ async function cleanupOldGenerations() {
           FROM workspace_generator_photo_refs r
           WHERE r.user_id = g.user_id::text
             AND r.image_url = g.image_url
+        )
+      )
+      AND (
+        g.video_url IS NULL
+        OR NOT EXISTS (
+          SELECT 1
+          FROM workspace_video_refs r
+          WHERE r.user_id = g.user_id::text
+            AND r.video_url = g.video_url
         )
       )
     `);
