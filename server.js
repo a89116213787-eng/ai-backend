@@ -5520,8 +5520,8 @@ if (imageBase64) {
   try {
     const previewBuffer = await sharp(buffer)
       .resize({
-        width: 576,
-        height: 576,
+        width: 512,
+        height: 512,
         fit: "inside",
         withoutEnlargement: true
       })
