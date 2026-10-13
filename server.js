@@ -5862,10 +5862,12 @@ app.get("/api/download-png/:folder/:file", async (req, res) => {
       .png()
       .toBuffer();
 
+    const downloadFilename = req.params.file.replace(/\.webp$/i, ".png");
+
     res.setHeader("Content-Type", "image/png");
     res.setHeader(
       "Content-Disposition",
-      `attachment; filename="dizain.png"`
+      `attachment; filename="${downloadFilename}"`
     );
 
     res.send(png);
