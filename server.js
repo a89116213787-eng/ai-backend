@@ -3746,7 +3746,14 @@ app.post("/api/workspace/save", authMiddleware, async (req, res) => {
 
   try {
     const userId = req.user.id;
-    const { data, armPromptCleanupKeys } = req.body;
+    const { data, armPromptCleanupKeys, scope } = req.body;
+
+    if (scope !== undefined && scope !== "mobile") {
+      return res.status(400).json({ ok: false, error: "invalid_workspace_scope" });
+    }
+    if (scope === "mobile" && (!data || !Array.isArray(data.cards) || !Array.isArray(data.connections))) {
+      return res.status(400).json({ ok: false, error: "invalid_mobile_workspace" });
+    }
 
     if (armPromptCleanupKeys !== undefined && !Array.isArray(armPromptCleanupKeys)) {
       return res.status(400).json({ ok: false, error: "invalid_cleanup_keys" });
@@ -3781,17 +3788,25 @@ app.post("/api/workspace/save", authMiddleware, async (req, res) => {
     );
     const currentWorkspaceData = currentWorkspaceResult.rows[0]?.data || null;
 
-    await client.query(
+    const savedWorkspaceResult = await client.query(
       `
       INSERT INTO workspaces (user_id, data)
-      VALUES ($1, $2)
+      VALUES ($1, CASE WHEN $3::boolean
+        THEN jsonb_build_object('mobileWorkspaceV1', $2::jsonb)
+        ELSE $2::jsonb - 'mobileWorkspaceV1'
+      END)
       ON CONFLICT (user_id)
       DO UPDATE SET
-        data = EXCLUDED.data,
+        data = CASE WHEN $3::boolean
+          THEN jsonb_set(COALESCE(workspaces.data, '{}'::jsonb), '{mobileWorkspaceV1}', $2::jsonb)
+          ELSE COALESCE(workspaces.data, '{}'::jsonb) || (EXCLUDED.data - 'mobileWorkspaceV1')
+        END,
         updated_at = NOW()
+      RETURNING data
       `,
-      [userId, data]
+      [userId, data, scope === "mobile"]
     );
+    const savedWorkspaceData = savedWorkspaceResult.rows[0].data;
 
     if (armedPromptCleanupKeys.length > 0) {
       await client.query(
@@ -3832,7 +3847,7 @@ app.post("/api/workspace/save", authMiddleware, async (req, res) => {
 
         return (
           !workspaceReferencesPromptKey(currentWorkspaceData, key) &&
-          !workspaceReferencesPromptKey(data, key)
+          !workspaceReferencesPromptKey(savedWorkspaceData, key)
         );
       });
 
@@ -3876,15 +3891,28 @@ app.get("/api/workspace/load", authMiddleware, async (req, res) => {
   try {
 
     const userId = req.user.id;
+    const scope = req.query.scope;
+    if (scope !== undefined && scope !== "mobile") {
+      return res.status(400).json({ ok: false, error: "invalid_workspace_scope" });
+    }
 
     const result = await pool.query(
       `SELECT data FROM workspaces WHERE user_id = $1`,
       [userId]
     );
 
+    const storedData = result.rows[0]?.data || null;
+    let data = storedData;
+    if (scope === "mobile") {
+      data = storedData?.mobileWorkspaceV1 || { cards: [], connections: [] };
+    } else if (storedData && Object.prototype.hasOwnProperty.call(storedData, "mobileWorkspaceV1")) {
+      const { mobileWorkspaceV1, ...desktopData } = storedData;
+      data = Object.keys(desktopData).length > 0 ? desktopData : null;
+    }
+
     res.json({
       ok: true,
-      data: result.rows[0]?.data || null
+      data
     });
 
   } catch (e) {
@@ -3918,13 +3946,78 @@ function getPromptImageKeyParts(key) {
   };
 }
 
-function workspaceReferencesPromptKey(data, key) {
-  const cards = Array.isArray(data?.cards) ? data.cards : [];
+function getWorkspaceCards(data) {
+  return [
+    ...(Array.isArray(data?.cards) ? data.cards : []),
+    ...(Array.isArray(data?.mobileWorkspaceV1?.cards) ? data.mobileWorkspaceV1.cards : [])
+  ];
+}
 
-  return cards.some((card) =>
-    card?.type === "prompt" &&
-    (card?.imageKey === key || card?.previewImageKey === key)
+function getWorkspaceMediaKey(value) {
+  if (typeof value !== "string" || !value) return null;
+  try {
+    const url = new URL(value, "https://api.dizain.pro");
+    if (url.pathname === "/api/r2-proxy") {
+      const original = url.searchParams.get("url");
+      if (!original) return null;
+      value = new URL(original).pathname;
+    } else {
+      value = url.pathname;
+    }
+    value = decodeURIComponent(value).replace(/^\/+/, "");
+    if (value.startsWith("api/file/")) value = value.slice("api/file/".length);
+    if (value.startsWith("api/download-video/")) value = `videos/${value.slice("api/download-video/".length)}`;
+    if (value.startsWith("api/video-poster/")) value = `videos/${value.slice("api/video-poster/".length)}`;
+    return value.startsWith("i/") || value.startsWith("videos/") ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function workspaceMediaFamily(key) {
+  return key.replace(/-preview\.webp$/, ".webp").replace(/-poster\.webp$/, ".mp4");
+}
+
+function workspaceReferencesMediaKeys(data, keys) {
+  const families = new Set(keys.map(workspaceMediaFamily));
+  return getWorkspaceCards(data).some((card) =>
+    ["imageKey", "previewImageKey", "videoKey", "image", "previewImage", "video"].some((field) => {
+      const key = getWorkspaceMediaKey(card?.[field]);
+      return key !== null && families.has(workspaceMediaFamily(key));
+    })
   );
+}
+
+function workspaceReferencesPromptKey(data, key) {
+  return workspaceReferencesMediaKeys(data, [key]);
+}
+
+async function hasWorkspaceMediaReference(keys) {
+  const result = await queryWorkspaceCleanup("SELECT data FROM workspaces");
+  return result.rows.some((row) => workspaceReferencesMediaKeys(row.data, keys));
+}
+
+async function queryWorkspaceCleanup(text, values = []) {
+  const client = await pool.connect();
+  let releaseError;
+  try {
+    await client.query("BEGIN ISOLATION LEVEL READ COMMITTED");
+    await client.query("SET LOCAL statement_timeout = '5s'");
+    await client.query("SET LOCAL lock_timeout = '500ms'");
+    const result = await client.query(text, values);
+    await client.query("COMMIT");
+    return result;
+  } catch (error) {
+    try {
+      await client.query("ROLLBACK");
+    } catch (rollbackError) {
+      releaseError = rollbackError;
+    }
+    throw error;
+  } finally {
+    // Never hold a pool client while awaiting an external R2 operation.
+    client.release(releaseError);
+  }
 }
 
 function isGeneratedImageKey(key) {
@@ -4258,7 +4351,7 @@ async function cleanupOldAssistantMessages(userId) {
 }
 
 function collectPromptCardCleanupKeys(data, userId, cleanupKeys) {
-  const cards = Array.isArray(data?.cards) ? data.cards : [];
+  const cards = getWorkspaceCards(data);
 
   for (const card of cards) {
     if (card?.type !== "prompt") continue;
@@ -4332,12 +4425,22 @@ async function cleanupQueuedR2Objects(objectKeys = null) {
           throw new Error("invalid_generated_video_poster_key");
         }
 
-        await deleteFromR2ByKey(row.object_key);
-
-        await pool.query(
-          `DELETE FROM r2_cleanup_queue WHERE id = $1`,
-          [row.id]
-        );
+        const workspaceMediaTypes = [
+          "generated_image", "generated_image_preview", "generated_video", "generated_video_poster",
+          "prompt_image", "prompt_preview", "legacy_prompt_image", "legacy_workspace_video"
+        ];
+        if (workspaceMediaTypes.includes(row.object_type)) {
+          const queued = await queryWorkspaceCleanup(
+            "SELECT id FROM r2_cleanup_queue WHERE id = $1 AND object_type = $2",
+            [row.id, row.object_type]
+          );
+          if (!queued.rows.length || await hasWorkspaceMediaReference([row.object_key])) continue;
+          await deleteFromR2ByKey(row.object_key);
+          await pool.query("DELETE FROM r2_cleanup_queue WHERE id = $1", [row.id]);
+        } else {
+          await deleteFromR2ByKey(row.object_key);
+          await pool.query("DELETE FROM r2_cleanup_queue WHERE id = $1", [row.id]);
+        }
       } catch (e) {
         await pool.query(
           `
@@ -4427,13 +4530,7 @@ app.post("/api/prompt-card/cleanup-abandoned-upload", authMiddleware, async (req
       `SELECT data FROM workspaces WHERE user_id = $1`,
       [userId]
     );
-    const workspaceCards = Array.isArray(workspaceResult.rows[0]?.data?.cards)
-      ? workspaceResult.rows[0].data.cards
-      : [];
-    const hasWorkspaceReference = workspaceCards.some((card) =>
-      card?.type === "prompt" &&
-      (card?.imageKey === key || card?.previewImageKey === key)
-    );
+    const hasWorkspaceReference = workspaceReferencesPromptKey(workspaceResult.rows[0]?.data, key);
 
     if (hasWorkspaceReference) {
       return res.status(409).json({
@@ -6821,6 +6918,10 @@ async function cleanupOldGenerations() {
             WHEN jsonb_typeof(w.data->'cards') = 'array'
             THEN w.data->'cards'
             ELSE '[]'::jsonb
+          END || CASE
+            WHEN jsonb_typeof(w.data->'mobileWorkspaceV1'->'cards') = 'array'
+            THEN w.data->'mobileWorkspaceV1'->'cards'
+            ELSE '[]'::jsonb
           END
         ) AS card
         WHERE card->>'type' = 'generator'
@@ -6836,6 +6937,10 @@ async function cleanupOldGenerations() {
           CASE
             WHEN jsonb_typeof(w.data->'cards') = 'array'
             THEN w.data->'cards'
+            ELSE '[]'::jsonb
+          END || CASE
+            WHEN jsonb_typeof(w.data->'mobileWorkspaceV1'->'cards') = 'array'
+            THEN w.data->'mobileWorkspaceV1'->'cards'
             ELSE '[]'::jsonb
           END
         ) AS card
@@ -6876,10 +6981,18 @@ async function cleanupOldGenerations() {
 
     for (const row of result.rows) {
       try {
+        const currentResult = await queryWorkspaceCleanup(
+          `SELECT id, image_url, image_key, preview_key, video_url, video_key
+           FROM generations
+           WHERE id = $1 AND liked = false AND created_at < NOW() - interval '17 days'`,
+          [row.id]
+        );
+        const current = currentResult.rows[0];
+        if (!current) continue;
         const keys = [];
 
-        if (row.image_url) {
-          const imageKey = getGeneratedImageKey(row);
+        if (current.image_url) {
+          const imageKey = getGeneratedImageKey(current);
 
           if (!imageKey) {
             throw new Error("invalid_generated_image_key");
@@ -6887,13 +7000,13 @@ async function cleanupOldGenerations() {
 
           keys.push(imageKey);
 
-          if (isGeneratedImagePreviewKey(row.preview_key)) {
-            keys.push(row.preview_key);
+          if (isGeneratedImagePreviewKey(current.preview_key)) {
+            keys.push(current.preview_key);
           }
         }
 
-        if (row.video_url) {
-          const videoKey = getGeneratedVideoKey(row.video_key) || getGeneratedVideoKey(row.video_url);
+        if (current.video_url) {
+          const videoKey = getGeneratedVideoKey(current.video_key) || getGeneratedVideoKey(current.video_url);
 
           if (!videoKey) {
             throw new Error("invalid_generated_video_key");
@@ -6901,10 +7014,12 @@ async function cleanupOldGenerations() {
 
           keys.push(videoKey);
 
-          if (isGeneratedVideoPosterKey(row.preview_key)) {
-            keys.push(row.preview_key);
+          if (isGeneratedVideoPosterKey(current.preview_key)) {
+            keys.push(current.preview_key);
           }
         }
+
+        if (await hasWorkspaceMediaReference(keys)) continue;
 
         for (const key of keys) {
           await deleteFromR2ByKey(key);
