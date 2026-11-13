@@ -59,27 +59,55 @@ export function createGoogleAccountService({
   }
 
   async function resumePending(tx, pending) {
-    if (pending.email_verified !== true) return { ok: true, code: "EMAIL_VERIFICATION_PENDING" };
     const email = typeof tx.identity.email === "string" ? tx.identity.email.trim().toLowerCase() : null;
     const fingerprint = crypto.createHash("sha256").update(pending.password_hash).digest("hex");
     if (pending.email !== pending.pending_email || email !== pending.pending_email ||
         pending.session_version !== pending.pending_session_version || fingerprint !== pending.pending_password_digest) {
       return { ok: false, code: "PENDING_ACCOUNT_CHANGED" };
     }
-    // A verified, unchanged reservation must not expire solely because of its age.
+    const user = pending.email_verified === true ? pending : await tx.verifyEmail(pending.id);
+    // An unchanged reservation stays bound to its original user, regardless of age.
     await tx.activatePending(pending.id, false);
-    return session(tx, pending);
+    return session(tx, user);
+  }
+
+  async function createAccount(tx, email) {
+    const passwordHash = await bcrypt.hash(crypto.randomBytes(32).toString("base64url"), 10);
+    const expires = new Date(now());
+    expires.setDate(expires.getDate() + 30);
+    const user = await tx.createUser(email, passwordHash, expires, null);
+    await tx.link(user.id);
+    return session(tx, user);
+  }
+
+  async function resolveAccount(proof) {
+    async function resolve(tx, allowCreate) {
+      const linked = await tx.findLinkedUser();
+      if (linked) return session(tx, linked.email_verified === true ? linked : await tx.verifyEmail(linked.id));
+      const pending = await tx.findPending();
+      if (pending) return resumePending(tx, pending);
+      const { email } = tx.identity;
+      if (typeof email !== "string" || email.length > 320 || !/^[^\s@]+@[^\s@]+$/.test(email.trim())) {
+        return { ok: false, code: "GOOGLE_EMAIL_REQUIRED" };
+      }
+      const normalized = email.trim().toLowerCase();
+      const existing = await tx.findUserByEmail(normalized);
+      if (existing) {
+        const user = existing.email_verified === true ? existing : await tx.verifyEmail(existing.id);
+        await tx.link(user.id);
+        return session(tx, user);
+      }
+      return allowCreate ? createAccount(tx, normalized) : { ok: false, code: "ACCOUNT_EXISTS" };
+    }
+    const result = await execute(proof, tx => resolve(tx, true));
+    // Only a known creation conflict is retried after rollback; never an uncertain COMMIT.
+    return result.code === "ACCOUNT_EXISTS" ? execute(proof, tx => resolve(tx, false)) : result;
   }
 
   return {
     // Call only after Stage 1 verifyCallback; the DB, not browser fields, supplies identity.
     async resolve(proof) {
-      return execute(proof, async tx => {
-        const user = await tx.findLinkedUser();
-        if (user) return session(tx, user);
-        const pending = await tx.findPending();
-        return pending ? resumePending(tx, pending) : { ok: true, next: "account_choice" };
-      });
+      return resolveAccount(proof);
     },
 
     async linkExisting(input) {
@@ -106,36 +134,7 @@ export function createGoogleAccountService({
     },
 
     async registerNew(proof) {
-      return execute(proof, async tx => {
-        const linked = await tx.findLinkedUser();
-        if (linked) return session(tx, linked);
-        const pending = await tx.findPending();
-        if (pending) return resumePending(tx, pending);
-        const { email, emailVerified } = tx.identity;
-        if (typeof email !== "string" || email.length > 320 ||
-            !/^[^\s@]+@[^\s@]+$/.test(email.trim())) {
-          return { ok: false, code: "GOOGLE_EMAIL_REQUIRED" };
-        }
-        const normalized = email.trim().toLowerCase();
-        if (await tx.findUserByEmail(normalized)) return { ok: false, code: "ACCOUNT_EXISTS" };
-        const passwordHash = await bcrypt.hash(crypto.randomBytes(32).toString("base64url"), 10);
-        const expires = new Date(now());
-        expires.setDate(expires.getDate() + 30);
-        const verifiedGmail = emailVerified === true && normalized.endsWith("@gmail.com");
-        const verificationCreatedAt = new Date(now());
-        const verification = verifiedGmail ? null : {
-          token: crypto.randomBytes(32).toString("hex"), createdAt: verificationCreatedAt,
-          expiresAt: new Date(verificationCreatedAt.getTime() + 24 * 60 * 60 * 1000),
-        };
-        const user = await tx.createUser(normalized, passwordHash, expires, verification);
-        if (verifiedGmail) {
-          await tx.link(user.id);
-          return session(tx, user);
-        }
-        await tx.linkPending(user, verification);
-        await tx.consume();
-        return { ok: true, code: "EMAIL_VERIFICATION_PENDING", verificationMail: { email: user.email, token: verification.token } };
-      });
+      return resolveAccount(proof);
     },
 
     async cancel(proof) {

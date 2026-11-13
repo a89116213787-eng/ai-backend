@@ -78,6 +78,19 @@ export function createGoogleAccountStore(pool) {
             return result.rows[0] ?? null;
           },
 
+          async verifyEmail(userId) {
+            const result = await client.query(
+              `UPDATE public.users
+               SET email_verified = true, email_verify_token = NULL,
+                   email_verify_expires = NULL, verification_reminders_sent = 0
+               WHERE id = $1
+               RETURNING id, email, role, email_verified, session_version`,
+              [userId]
+            );
+            if (result.rowCount !== 1) throw new GoogleOAuthError();
+            return result.rows[0];
+          },
+
           async createUser(email, passwordHash, trialExpiresAt, verification = null) {
             // Do not assume a production index that is absent from the source tree.
             const schema = await client.query(
