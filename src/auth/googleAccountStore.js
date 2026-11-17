@@ -31,7 +31,7 @@ export function createGoogleAccountStore(pool) {
         const result = await action({
           identity: {
             subject: flow.google_sub,
-            email: flow.google_email,
+            email: flow.google_email_verified === true ? flow.google_email : null,
             emailVerified: flow.google_email_verified,
           },
 
